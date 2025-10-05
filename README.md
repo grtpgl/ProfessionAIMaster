@@ -11,12 +11,11 @@ Ogni progetto è pensato per applicare le principali tecniche di **analisi dei d
 
 | Cartella | Descrizione |
 |------------|---------------|
-| `01-Software_gestionale_negozio_prodotti_vegani` | Programmazione con Python: Object Oriented Programming, gestione del flusso del codice con cicli ed istruzioni condizionali, gestione degli errori |
+| `01_Programmazione con Python` | Programmazione con Python: Object Oriented Programming, gestione del flusso del codice con cicli ed istruzioni condizionali, gestione degli errori |
 
 > Ogni cartella contiene:  
 > - Notebook Jupyter (`.ipynb`) con codice e spiegazioni  
-> - Dataset di esempio (se non coperti da NDA)  
-> - Breve descrizione del progetto nel file `README.md` dedicato  
+> - Dataset di esempio (se presenti e non coperti da NDA)  
 
 ---
 
