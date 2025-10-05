@@ -43,6 +43,6 @@ Ogni progetto è pensato per applicare le principali tecniche di **analisi dei d
 
 Se vuoi discutere dei progetti, collaborare o semplicemente scambiare idee su Data Science, puoi contattarmi qui:
 
-- [LinkedIn](https://www.linkedin.com/in/greta-pagliari/)) 
+- [LinkedIn](https://www.linkedin.com/in/greta-pagliari/)
 
 ---
