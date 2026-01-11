@@ -18,7 +18,7 @@ Ogni progetto è pensato per applicare le principali tecniche di **analisi dei d
 > I progetti presenti in questo repository simulano **casi aziendali reali**, sviluppati con un approccio **data-driven** end-to-end: dalla comprensione del problema, all’analisi statistica, fino all’interpretazione dei risultati a supporto delle decisioni strategiche.
 
 > Ogni cartella contiene:  
-> - Notebook Jupyter (`.ipynb`) con codice e spiegazioni  
+> - Codice e spiegazioni  
 > - Dataset di esempio (se presenti e non coperti da NDA)  
 
 ---
