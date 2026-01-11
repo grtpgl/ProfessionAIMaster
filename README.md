@@ -11,7 +11,11 @@ Ogni progetto è pensato per applicare le principali tecniche di **analisi dei d
 
 | Cartella | Descrizione |
 |------------|---------------|
-| `01_Programmazione con Python` | Programmazione con Python: Object Oriented Programming, gestione del flusso del codice con cicli ed istruzioni condizionali, gestione degli errori |
+| `01_Programmazione con Python` | Fondamenti di **programmazione Python per Data Science**: Object Oriented Programming, controllo del flusso, gestione degli errori e sviluppo di codice leggibile e riutilizzabile |
+| `02_Statistica_Descrittiva` | **Analisi esplorativa del mercato immobiliare del Texas**: studio delle variabili economiche e geografiche, pulizia dei dati, analisi descrittiva avanzata e visualizzazione dei principali trend a supporto delle decisioni di business |
+| `03_Statistica_Inferenziale` | **Modello statistico predittivo in ambito sanitario**: analisi inferenziale, test di ipotesi, regressione lineare multipla e valutazione delle performance del modello per la previsione del peso neonatale |
+
+> I progetti presenti in questo repository simulano **casi aziendali reali**, sviluppati con un approccio **data-driven** end-to-end: dalla comprensione del problema, all’analisi statistica, fino all’interpretazione dei risultati a supporto delle decisioni strategiche.
 
 > Ogni cartella contiene:  
 > - Notebook Jupyter (`.ipynb`) con codice e spiegazioni  

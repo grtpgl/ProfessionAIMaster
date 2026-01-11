@@ -1,0 +1,1023 @@
+---
+title: "Progetto: Analisi del Mercato Immobiliare del Texas"
+author: "Greta Pagliari"
+date: "2025-10-07"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# Impostazioni generali per il documento
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# Impostazione del CRAN globale per poter scaricare i pacchetti
+options(repos = c(CRAN = "https://cran.r-project.org"))
+```
+
+# ANALISI DEL MERCATO IMMOBILIARE DEL TEXAS
+
+## Importazione del dataset “Real Estate Texas.csv” e dei pacchetti necessari
+
+```{r}
+setwd("C:/Users/Greta/Desktop/Profession AI - appunti/Progetto_2_Statistica_descrittiva_per_datascience")
+dati <- read.csv("Real Estate Texas.csv",sep=",")
+
+head(dati) # per avere un'anteprima di come è composto il dataset
+
+install.packages("moments")  # per analizzare la forma della distribuzione (asimmetria e curtosi)
+install.packages("ineq")     # per calcolare il coefficiente di Gini
+install.packages("ggplot2")  # per creare grafici
+install.packages("dplyr")    # per manipolare e trasformare i dati
+library(moments)
+library(ineq)
+library(ggplot2)
+library(dplyr)
+```
+--------------------------------------------------------------------------------------------------------------------------------------------
+
+## 1) Analisi delle variabili 
+
+Il dataset 'dati' contiene informazioni sulle dinamiche del mercato immobiliare di diverse città del Texas nel corso del tempo. 
+Ogni riga rappresenta un'osservazione relativa a un determinato mese e anno per una città specifica.
+
+Le variabili incluse nel dataset sono:
+
+- 'city': variabile qualitativa nominale, che rappresenta la città di riferimento. 
+È utile per confrontare le caratteristiche del mercato immobiliare tra diverse aree geografiche.
+
+- 'year' e 'month': variabili quantitative discrete con significato temporale, che rappresentano rispettivamente l'anno e il mese di riferimento.
+Permettono di effettuare analisi di serie storiche, studiare i trend e rilevare eventuali fenomeni stagionali. 
+In alcuni casi è utile combinarle in un’unica variabile 'date' per semplificare l’analisi temporale.
+
+- 'sales': variabile quantitativa discreta, che rappresenta il numero totale di vendite registrate nel periodo considerato.
+Permette di valutare l’andamento della domanda immobiliare nel tempo e di confrontarla tra città.
+
+- 'volume': variabile quantitativa continua che misura il valore totale delle vendite (in milioni di dollari).
+Permette di analizzare la dimensione economica del mercato e di individuare eventuali variazioni significative nel volume complessivo delle transazioni.
+
+- 'median_price': variabile quantitativa continua che rappresenta il prezzo mediano di vendita (in dollari).
+È un indicatore centrale della dinamica dei prezzi e consente di valutare l’evoluzione del mercato in termini di valore delle transazioni.
+
+- 'listings': variabile quantitativa discreta che indica il numero totale di annunci attivi nel periodo considerato. 
+Può essere utilizzata per misurare l’offerta presente sul mercato e per calcolare indicatori come il rapporto tra offerta e vendite.
+
+- 'months_inventory': variabile quantitativa continua che misura il tempo medio (in mesi) necessario per assorbire l’offerta presente sul mercato al ritmo attuale di vendite, cioè il tempo (in mesi) necessario per vendere tutte le inserzioni correnti.
+'Months_inventory' corrisponde al numero di annunci attivi ('listings') diviso le vendite ('sales') mensili.
+Questo indicatore è fondamentale per valutare la liquidità del mercato e la pressione tra domanda e offerta.
+NOTA TECNICA. Il months inventory è usato per valutare se il mercato è più favorevole ai venditori (months inventory di pochi mesi) o agli acquirenti (months inventory di molti mesi). In particolare:
+months inventory < 6 --> mercato favorevole al venditore (seller’s market),
+months inventory > 6 --> mercato favorevole all'acquirente (buyer’s market). 
+
+
+
+**Considerazioni analitiche:**
+
+La variabile qualitativa 'city' permette di effettuare confronti trasversali tra mercati geografici diversi, evidenziando eventuali differenze strutturali o dinamiche locali.
+
+Le variabili temporali ('year' e 'month') permettono di svolgere analisi dinamiche, come:
+- studio dei trend di lungo periodo (ad esempio l’aumento o la diminuzione dei prezzi);
+- individuazione di stagionalità nelle vendite o nei volumi;
+- confronto delle performance di mercato nel tempo per ciascuna città.
+
+Le variabili quantitative ('sales', 'volume', 'median_price', 'listings', 'months_inventory') consentono analisi descrittive approfondite attraverso statistiche di sintesi (indici di posizione, variabilità e forma, distribuzioni di frequenza) e la costruzione di indicatori economici derivati (es. prezzo medio per vendita, ovvero 'volume'/'sales'; oppure efficacia degli annunci di vendità, ovvero 'sales'/'listings').
+
+```{r}
+# Raggruppo le variabili dello stesso tipo per poter successivamente applicare le funzioni adatte.
+
+# Qualitative nominali: city
+qualitative_nominali <- c("city")
+
+# Temporali: year, month
+temporali <- c("year", "month")
+
+# Quantitative discrete: year, sales, listings
+quantitative_discrete <- c("sales", "listings")
+
+# Quantitative continue: volume, median_price, months_inventory
+quantitative_continue <- c("volume", "median_price", "months_inventory")
+
+# Quantitative discrete e continue
+all_quantitative <- c(quantitative_discrete, quantitative_continue)
+
+# Gestione delle date
+dati$date <- as.Date(paste(dati$year, dati$month, "01", sep = "-"))
+
+```
+
+--------------------------------------------------------------------------------------------------------------------------------------------
+
+## 2) Indici di posizione, variabilità e forma, e distribuzione di frequenza.
+
+### VARIABILI QUALITATIVE NOMINALI
+Per le variabili qualitative nominali (in questo caso solo 'city') si calcolano:
+- Frequenze assolute e relative
+- Moda
+- Indice di eterogeneità di Gini
+NOTA. Nel caso di variabili qualitative nominali come 'city', le frequenze cumulate e cumulate relative non hanno significato statistico, quindi non sono state calcolate.
+
+```{r}
+for (var in qualitative_nominali) {
+  freq_ass <- table(dati[[var]])         # frequenze assolute
+  freq_rel <- freq_ass / sum(freq_ass)   # frequenze relative
+  
+  dist_var <- data.frame(
+    Valore = names(freq_ass),
+    Frequenza = as.numeric(freq_ass),
+    Frequenza_relativa = round(as.numeric(freq_rel), 3)
+  )
+  # Moda
+  moda_var <- names(freq_ass[freq_ass == max(freq_ass)])
+  
+  # Indice di eterogenità di Gini 
+  # calcolato come: (1 - somma delle frequenze relative al quadrato) / (numero modalità - 1 / numero modalità)
+  Gini_index <- (1 - sum(freq_rel^2))/((length(freq_rel)-1)/length(freq_rel))
+  
+  cat("Variabile qualitativa nominale:", var, "\n")
+  cat("Distribuzione di frequenza:\n")
+  print(dist_var)
+  cat("Moda:", paste(moda_var, collapse = ", "), "\n")
+  cat("Indice di eterogeneità di Gini:", round(Gini_index, 3), "\n\n")
+}
+```
+**Interpretazione dei risultati**
+
+La variabile 'city' è quadrimodale, cioè ha 4 mode: tutte le città (Beaumont, Bryan-College Station, Tyler, Wichita Falls) sono rappresentate equamente.
+Le frequenze assolute (= 60 per tutte le città) e le frequenze relative (=0.25 per tutte le città) confermano che tutte le città sono rappresentate equamente.
+Una terza conferma è data dall'indice di eterogeneità di Gini = 1. Relativamente a una variabile nominale, come 'city', l'indice di eterogeneità di Gini indica quanto le diverse categorie (modalità) sono distribuite in modo uniforme (eterogeneità) o meno (omogeneità). Varia tra 0 (massima omogeneità) e 1 (massima eterogeneità). 
+L’indice di eterogenità di Gini per la variabile 'city' risulta pari a 1, che è il valore massimo e corrisponde a una distribuzione perfettamente uniforme dei dati nelle varie categorie della variabile qualitativa.
+
+NOTA. Il calcolo dell'indice di eterogenità di Gini per le variabili qualitative nominali è il seguente:
+Gini = (1 - somma delle frequenze relative al quadrato)/[(numero campioni -1)/(numero campioni)]
+Con 4 categorie equiprobabili --> (1 - (4 * 0.25^2))/3/4 = 1
+
+Questa distribuzione quadrimodale di 'city', in cui ciascuna delle quattro città rappresenta il 25% delle osservazioni è ottimale per uno studio statistico perchè rende confrontabili le 4 città.
+
+
+
+### VARIABILI TEMPORALI
+Per le variabili temporali ('year', 'month') si calcolano:
+- Frequenze assolute e relative, che sono utili per capire la distribuzione nel tempo.
+- Moda
+- Indice di eterogeneità di Gini
+Per queste variabili le frequenze cumulate e cumulate relative non hanno significato statistico, quindi non sono state calcolate.
+
+```{r}
+# Distribuzione di frequenza, moda e indice di eterogeneità di Gini per variabili TEMPORALI
+for (var in temporali) {
+  freq_ass <- table(dati[[var]])
+  freq_rel <- freq_ass / sum(freq_ass)
+  
+  dist_var <- data.frame(
+    Valore = names(freq_ass),
+    Frequenza = as.numeric(freq_ass),
+    Frequenza_relativa = round(as.numeric(freq_rel), 3)
+  )
+  
+  # moda
+  moda_var <- names(freq_ass[freq_ass == max(freq_ass)])
+  
+  # Indice di eterogeneità di Gini
+  Gini_index <- (1 - sum(freq_rel^2))/((length(freq_rel)-1)/length(freq_rel))
+  
+  cat("Variabile temporale:", var, "\n")
+  cat("Distribuzione di frequenza:\n")
+  print(dist_var)
+  cat("(Moda) Gli elementi di '", var, "' più frequenti ed equamente presenti sono:", paste(moda_var, collapse = ", "), "\n\n")
+  cat("Indice di eterogeneità di Gini:", round(Gini_index, 3), "\n\n")
+}
+```
+
+**Interpretazione dei risultati**
+
+Le frequenze assolute e relative (tutte uguali tra loro per ogni variabile), la moda (tutti gli anni e tutti i mesi sono la moda) e l'indice di eterogenità di Gini = 1 (massima eterogeneità: osservazioni equamente distribuite nelle cateorie delle variabili) per le variabili 'year' e 'month' indicano che tutte le modalità delle variabili hanno la stessa frequenza. Le osservazioni sono equamente distribuite negli anni e nei mesi in studio. Questa distribuzione è ottimale per uno studio statistico perchè rende confrontabili i periodi di mesi e anni.
+
+
+
+
+### VARIABILI QUANTITATIVE DISCRETE E CONTINUE
+
+### Indici di posizione, variabilità e forma
+
+Per le variabili quantitatve sono di seguito calcolati i seguenti indici di posizione, variabilità e forma:
+
+- **Minimo** e **Massimo** sono rispettivamente il valore minimo e il valore massimo dei dati. **Range** è l'intervallo di valori che va dal valore minimo al valore massimo.
+
+- **Media** è la media aritmetica, che corrisponde alla somma dei valori divisa per il loro numero.
+
+- **Mediana** corrisponde al valore centrale di un insieme ordinato di dati, ed è un indice più robusto della media perchè risente meno della presenza di outliers o valori anomali.
+
+- **Moda** è il valore con frequenza assoluta maggiore.
+
+- **Quartili** sono valori che dividono un insieme di dati ordinati in quattro parti uguali: il primo quartile (Q1) è valore sotto il quale cade il 25% dei dati; il secondo quartile (Q2 = mediana) è valore sotto il quale cade il 50% dei dati; e il terzo quartile (Q3) è valore sotto il quale cade il 75% dei dati. L'**intervallo interquartile (IQR)** corrisponde a Q3-Q1 e corrisponde al 50% delle osservazioni centrali della distribuzione.
+
+- **Varianza** e **deviazione standard** sono misure di dispersione statistica, che indicano quanto i dati si discostano dalla media. La varianza è la media dei quadrati delle differenze dalla media (in unità al quadrato), mentre la deviazione standard (scarto quadratico medio) è la radice quadrata della varianza, espressa nella stessa unità di misura dei dati originali.
+
+- **Coefficiente di variazione (CV)** corrisponde al rapporto tra la deviazione standard e la media, moltiplicato x 100. Come varianza e deviazione standard, misura la dispersione statistica; ma a differenza degli altri due indici di variabilità non ha unità di misura (è una percentuale), per questo è utile per confrontare la variabilità di variabili diverse che possono avere unità di misura diverse.
+
+- **Skewness (asimmetria)** misura l'asimmetria di una distribuzione, indicando quanto la distribuzione si discosta dalla distribuzione normale.
+skewness = 0 --> distribuzione che tende a coincidere con una distribuzione normale. Media = mediana = moda.
+skewness > 0 --> Distribuzione asimmetrica a destra: coda a destra più lunga (valori estremi positivi), e la maggior parte dei dati si concentra a sinistra della media. Media > Mediana.
+skewness < 0 --> Distribuzione asimmetrica a sinistra: la coda sinistra è più lunga (valori estremi negativi), e la maggior parte dei dati si concentra a destra della media. Media < Mediana.
+
+- **kurtosis (curtosi)** indica lo schiacciamento/allungamento della forma di una distribuzione rispetto a una distribuzione normale.
+kurtosis = 0 (Mesocurtica): Distribuzione che tende a coincidere con una distribuzione normale.
+kurtosis > 0 (Leptocurtica): Distribuzione più allungata verso l’alto della distribuzione normale, più appuntita, code pesanti (molti outlier/valori estremi).
+kurtosis < 0 (Platicurtica): Distribuzione più piatta rispetto alla distribuzione normale, code più leggere (pochi valori estremi, più uniforme). 
+
+- **coefficiente di Gini** misura la disuguaglianza nella distribuzione di una variabile. Va da 0 (massima uguaglianza) a 1 (massima disuguaglianza).
+
+NOTA. La moda non è stata calcolata per variabili quantitative continue, perchè non è statisticamente rilevante, dal momento che quasi tutti i valori sono unici.
+
+NOTA. Il coefficiente di Gini è calcolabile per tutte le variabili quantitatve, ma è statisticamente significativo solo per variabili che rappresentano una distribuzione di risorse, beni, o quantità economicamente significative o “accumulabili”. Per la variabile 'months_inventory' il coefficiente di Gini non è stato calcolato perchè questa variabile non misura una risorsa distribuibile, ma un indicatore di equilibrio di mercato (cioè il rapporto tra annuci attivi e numero di case vendute in un mese).
+
+
+```{r}
+# Funzione per indici di posizione, variabilità e forma
+
+calc_indices <- function(x, discrete = FALSE) {
+
+  res <- list(
+    Min = min(x, na.rm=TRUE),
+    Max = max(x, na.rm=TRUE),
+    Range = max(x, na.rm=TRUE) - min(x, na.rm=TRUE),
+    Mean = mean(x, na.rm=TRUE),
+    Median = median(x, na.rm=TRUE),
+    Q1 = quantile(x, 0.25, na.rm=TRUE),
+    Q3 = quantile(x, 0.75, na.rm=TRUE),
+    IQR = IQR(x, na.rm=TRUE),
+    SD = sd(x, na.rm=TRUE),
+    Variance = var(x, na.rm=TRUE),
+    CV = sd(x, na.rm=TRUE)/mean(x, na.rm=TRUE),
+    Skewness = skewness(x, na.rm=TRUE),
+    Kurtosis = kurtosis(x, na.rm=TRUE),
+    Gini_coeff = Gini(x, na.rm=TRUE)
+  )
+  
+  # Gestione della moda: calcolata solo per variabili discrete
+  if (discrete) {
+    res$Mode <- as.numeric(names(table(x))[table(x) == max(table(x))])
+  } 
+  else {
+    res$Mode <- "Moda non indicativa per variabili continue"
+  }
+
+  return(res)
+}
+
+
+
+# Funzione per stampare i risultati in modo leggibile
+
+print_indices <- function(var, indices) {
+  cat("___ Variabile:", var, "___\n")
+  cat("Minimo: ", indices$Min, "\n")
+  cat("Massimo: ", indices$Max, "\n")
+  cat("Range: ", indices$Range, "\n")
+  cat("Media: ", indices$Mean, "\n")
+  cat("Mediana: ", indices$Median, "\n")
+  cat("Moda: ", paste(indices$Mode, collapse = ", "), "\n")
+  cat("Q1: ", indices$Q1, "\n")
+  cat("Q3: ", indices$Q3, "\n")
+  cat("IQR: ", indices$IQR, "\n")
+  cat("Deviazione standard: ", indices$SD, "\n")
+  cat("Varianza: ", indices$Variance, "\n")
+  cat("Coefficiente di variazione: ", indices$CV, "\n")
+  cat("Skewness (asimmetria): ", indices$Skewness, "\n")
+  cat("Kurtosis (curtosi): ", indices$Kurtosis, "\n")
+  cat("Coefficiente di Gini: ", indices$Gini_coeff, "\n")
+  cat("\n")
+}
+
+
+
+# analisi variabili quantitative discrete e continue
+results <- list()
+
+for (var in all_quantitative) {
+
+  is_discrete <- var %in% quantitative_discrete
+
+  results[[var]] <- calc_indices(
+    dati[[var]],
+    discrete = is_discrete
+  )
+
+  # Gestione del coefficiente di Gini
+  if (var == "months_inventory") {
+    results[[var]]$Gini_coeff <- "Coefficiente di Gini non indicativo"
+  }
+
+  print_indices(var, results[[var]])
+}
+
+
+```
+### Distribuzione di frequenza e rappresentazione grafica
+
+Per le variabili quantitative DISCRETE, essendo molti i dati, è stata fatta la scelta di raggrupparli in classi per rendere comprensibile e interpretabile il bar chart e poter fare considerazioni sulla distribuzione delle variabili.
+Per le variabili quantitative CONTINUE invece è necessario raggruppare in classi per poter mostrare una distribuzione di frequenza, perchè una variabile di questo tipo ha osservazioni che tendono a essere tutte diverse (o quasi), e quindi la frequenza assoluta di ciascun valore è spesso 1 o poco maggiore.
+
+NOTA. Per le variabili continue si potrebbe sceglire un boxplot per la rappresentazione grafica, ma in questo caso, per fare una analisi simile per variabili discrete e continue è stata visualizzata anche per le variabili continue la distribuzione completa dei dati (frequenze per intervalli) con un bar chart.
+
+```{r}
+# distribuzione di frequenza per variabili QUANTITATIVE raggruppate in classi + bar chart
+
+
+
+# Definizione ampiezza classi
+class_widths <- list(sales = 20, listings = 150, volume = 5, median_price = 10000, months_inventory = 1)
+
+for (var in all_quantitative) {
+  
+  if (!var %in% names(class_widths)) # Controllo se la variabile ha una suddivisione in classi definita
+    next
+  
+  # Ampiezza delle classi  
+  class_width <- class_widths[[var]]
+  
+  # Intervallo delle classi
+  min_val <- min(dati[[var]], na.rm = TRUE)
+  max_val <- max(dati[[var]], na.rm = TRUE)
+  
+  # Creazione dei limiti delle classi e di etichette leggibili
+  breaks <- seq(min_val, max_val + class_width, by = class_width)
+  labels <- paste0(format(breaks[-length(breaks)], big.mark = "'"), "-", 
+                   format(breaks[-1]-1, big.mark = "'"))
+  classi <- cut(dati[[var]], breaks = breaks, labels = labels, right = TRUE, include.lowest = TRUE) # estremo superiore incluso, valore più basso incluso
+  
+  # Distribuzione di frequenze
+  freq_ass <- table(classi)
+  freq_rel <- freq_ass / sum(freq_ass)
+  
+  dist_var <- data.frame(
+    Classe = names(freq_ass),
+    Frequenza = as.numeric(freq_ass),
+    Frequenza_relativa = round(as.numeric(freq_rel), 3),
+    Frequenza_cumulata = cumsum(as.numeric(freq_ass)),
+    Frequenza_cumulata_relativa = round(cumsum(as.numeric(freq_rel)), 3)
+  )
+  
+  # etichette leggibili per months_inventory
+  if (var == "months_inventory") {
+    dist_var$Classe <- gsub("-.*", "", dist_var$Classe)
+  }
+  
+  cat("Distribuzione di frequenza per", var, "per classi di valori:\n")
+  print(dist_var)
+  cat("\n")
+ 
+   
+  # Grafico a barre
+  bar_chart_var_discr <- ggplot(dist_var, aes(x = Classe, y = Frequenza)) +
+    geom_bar(stat = "identity", fill = "steelblue") +
+    geom_text(aes(label = Frequenza), vjust = -0.5) +
+    labs(title = paste("Distribuzione di frequenza per", var),
+         x = "Classe",
+         y = "Frequenza") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  
+  print(bar_chart_var_discr)
+}
+
+```
+
+**Interpretazione dei risultati**
+
+**Variabile: sales (numero di vendite)**
+
+La media (192.3) è leggermente più alta della mediana (175.5), quindi la distribuzione è leggermente asimmetrica positiva, cioè con coda a destra (come confermato da Skewness = 0.718). La curtosi < 3 indica una distribuzione platicurtica, code meno pronunciate rispetto alla normale.
+
+Il valore della deviazione standard (≈79.65) e il coefficiente di variazione (≈0.41) indicano variabilità moderata-alta: il numero di vendite cambia abbastanza nel tempo e tra città. Anche l’intervallo interquartile (IQR = 120) conferma che il 50% dei valori è distribuito in un intervallo ampio.Il coefficiente di Gini pari a 0.23 indica un livello di disuguaglianza moderato nella distribuzione delle vendite.
+
+La distribuzione di frequenza per classi mostra che la maggior parte delle osservazioni si concentra nelle classi più basse e intermedie, mentre le frequenze diminuiscono progressivamente nelle classi più elevate, con poche osservazioni negli intervalli superiori. Questa evidenza grafica conferma la presenza di un’asimmetria positiva, coerente con gli indici descrittivi, e suggerisce che valori di vendite molto elevati sono rari rispetto alla maggioranza delle osservazioni.
+
+
+**Variabile: listings (numero di annunci immobiliari)**
+
+La media (1738) è leggermente superiore alla mediana (1618.5), indicando una lieve asimmetria positiva, confermata dall’indice di asimmetria (Skewness ≈ 0.65). La curtosi < 3 indica una distribuzione relativamente piatta (platicurtica), senza picchi estremamente pronunciati.
+
+La deviazione standard è elevata e il coefficiente di variazione è pari a circa 0.43, indicando una forte variabilità del numero di annunci tra periodi e città.Il coefficiente di Gini pari a circa 0.24 suggerisce una concentrazione moderata nella distribuzione degli annunci.
+
+Il bar chart delle frequenze per classi evidenzia una distribuzione molto irregolare, caratterizzata da più picchi principali e da diverse classi con frequenze molto basse o nulle. Questa irregolarità grafica riflette l’elevata variabilità misurata dagli indici sintetici e indica che l’offerta immobiliare varia in modo marcato tra città e periodi, con concentrazioni episodiche di annunci in specifici intervalli di valori.
+
+
+**Variabile: volume (Volume totale delle vendite, in milioni di dollari)**
+
+La media è più alta della mediana, quindi la distribuzione è asimmetrica positiva, confermata confermata dall’indice di asimmetria (Skewness ≈ 0.885). La curtosi è superiore a 3, indicando una distribuzione leptocurtica, caratterizzata da code più pesanti e da picchi accentuati, segnale della presenza di valori estremi o di forti variazioni (ad esempio stagionali).
+
+Il volume totale delle vendite presenta una variabilità elevata, con un coefficiente di variazione pari a circa 0.54, superiore a quello osservato per le variabili 'sales' e 'listings'. Il coefficiente di Gini (≈ 0.30) indica una disuguaglianza moderata-alta nella distribuzione dei volumi delle vendite.
+
+La distribuzione di frequenza per classi mostra un picco principale nelle classi medio-basse, seguito da una diminuzione graduale delle frequenze verso destra. La presenza di una coda destra lunga conferma che, accanto a valori tipici contenuti, si osservano pochi periodi o mercati con volumi di vendita eccezionalmente elevati. Questa evidenza grafica è coerente con l’elevata variabilità e con la curtosi elevata osservate negli indici descrittivi.
+
+
+**Variabile: median_price (prezzo mediano)**
+
+La media è leggermente inferiore alla mediana, quindi è presente una lieve asimmetria negativa, confermata dall’indice di asimmetria (Skewness ≈ -0.36). La curtosi < 3 indica una distribuzione relativamente piatta (platicurtica), senza picchi estremi.
+
+La variabilità è relativamente bassa (CV ≈ 0.17) significa che i prezzi mediani sono abbastanza stabili.Il coefficiente di Gini (≈ 0.097) indica una bassa disuguaglianza nella distribuzione dei prezzi, suggerendo una sostanziale omogeneità dei valori osservati.
+
+Il grafico delle frequenze per classi mostra una maggiore concentrazione delle osservazioni nelle fasce di prezzo medio-alte, con frequenze più basse nelle classi di prezzo inferiori. Questa configurazione grafica conferma l’asimmetria negativa e suggerisce che i prezzi mediani si concentrano prevalentemente su livelli medio-alti, con una limitata presenza di valori particolarmente bassi.
+
+
+**Variabile: months_inventory**
+
+Media (≈ 9.19) e mediana (= 8.95) sono simili, indicando una distribuzione è quasi simmetrica. Questo è confermato dall'indice di asimmetria prossimo allo 0 (Skewness ≈ 0.04). La curtosi è vicina 3 (≈ 2.83), indicando una distribuzione prossima alla normale.
+
+La variabilità è moderata (CV ≈ 0.25), suggerendo che il tempo di assorbimento dell’offerta varia, ma in misura più contenuta rispetto ad altre variabili come 'sales' e 'volume'.
+
+Il bar chart delle frequenze mostra un picco nelle classi corrispondenti a valori di ‘months_inventory’ compresi approssimativamente tra 7 e 8 mesi, seguito da una graduale diminuzione delle frequenze nelle classi più elevate. Questo andamento conferma che il mercato tende ad avere tempi di assorbimento medi, con pochi casi estremi caratterizzati da mercati più lenti, ma non dominanti nel campione.
+
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------
+
+## 3) Identificazione delle variabili con maggiore variabilità e asimmetria
+
+### Variabile con maggiore variabilità
+
+La variabile con variabilità più elevata è 'volume'.
+
+Per confrontare la variabilità tra le variabili in studio non è opportuno utilizzare indici come la deviazione standard e la varianza, perchè questi sono indici assoluti che dipendono dalle unità di misura, quindi non risultano adatte a fare confronti tra variabili con ordini di grandezza molto diversi.
+Si utilizza invece il coefficiente di variazione (CV), che è un indice relativo e adimensionale, quindi ottimo per il confronto tra variabili diverse con ordini di grandezza diversi.
+Il coefficiente di variazione si calcola come: CV = σ/μ.
+
+```{r}
+# stampo tutti i coefficienti di variazione
+for (var in names(results)) {
+  cat(var, " - Coefficiente di variazione (CV): ", results[[var]]$CV, "\n")
+}
+```
+Dall’analisi dei CV risulta che volume presenta il valore più alto (CV ≈ 0.537), il che indica che il volume totale delle vendite è la variabile più instabile e soggetta a fluttuazioni rispetto alla sua media.
+Questo risultato suggerisce che il mercato immobiliare texano presenta variazioni molto significative nel volume delle vendite, probabilmente legate a fattori stagionali o macroeconomici.
+
+NOTA. Nel confronto considero tutte le variabili quantitative, ma non le variabili qualitative perchè per queste ultime non hanno senso gli indici di variabilità.
+
+
+### Variabile più asimmetrica
+
+La variabile più asimmetrica è 'volume'.
+
+Per individuare la variabile con la distribuzione più asimmetrica si è fatto riferimento al coefficiente di asimmetria (skewness), che misura la mancanza di simmetria di una distribuzione, rivelando se la "coda" della distribuzione è più estesa da un lato rispetto all'altro:
+- Se Skewness > 0, la distribuzione è asimmetrica positiva (coda a destra);
+- Se Skewness < 0, la distribuzione è asimmetrica negativa (coda a sinistra);
+Maggiore è il valore assoluto, maggiore è l’asimmetria.
+
+```{r}
+# stampo tutti gli indici di asimmetria
+for (var in names(results)) {
+  cat(var, " - indice di asimmetria (Skewness): ", results[[var]]$Skewness, "\n")
+}
+
+```
+Confrontando gli indici di asimmetria di tutte le variabili quantitative, si può vedere che la variabile con indice di asimmetria maggiore è 'volume' (skewness ≈ 0.885).
+Questo indica una distribuzione moderatamente asimmetrica a destra, con la presenza di alcuni valori molto elevati di volume di vendita che fanno tendere la distribuzione verso destra.
+Ciò suggerisce che il mercato immobiliare texano è caratterizzato da alcuni periodi o aree con volumi di vendita eccezionalmente alti rispetto alla media generale.
+
+NOTA. Nel confronto considero tutte le variabili quantitative, ma non le variabili qualitative perchè per queste ultime non hanno senso gli indici di variabilità.
+
+
+Riassumendo, tra le variabili quantitative analizzate, *volume* risulta quella con maggiore variabilità relativa e con distribuzione più asimmetrica. Questo indica che il volume totale delle vendite immobiliari è la misura più soggetta a fluttuazioni e presenta anche una distribuzione fortemente influenzata da valori particolarmente elevati. In altre parole, il mercato immobiliare mostra una dinamica disomogenea in termini di valore complessivo delle transazioni.
+
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------
+
+# 4) Divisione di una delle variabili quantitative in classi, costruzione della distribuzione di frequenze, del grafico a barre corrispondente e calcolo dell’indice di Gini. 
+
+NOTA. distribuzione di frequenza, bar chart e coefficiente di Gini per la variabile median_price erano già state mostrate al punto 2. Di seguito sono riportate e commentate tutte insieme e il grafico è reso ancora meglio interpretabile con una suddivisione in classi immediata da comprendere.
+NOTA. La suddivisione in classi è leggermente diversa da quella mostrata nel punto 2, ma non altera le conclusioni strutturali.
+
+```{r}
+# suddivisione in classi della variabile median_price
+
+numero_minimo <- min(dati$median_price)
+numero_massimo <-max(dati$median_price)
+N=dim(dati)[1]
+
+breaks_median_price <- seq(70e3, 180e3, by=10e3)
+median_price_cl <- cut(dati$median_price,
+                       breaks = breaks_median_price,  # classi da 70000 a 180000 con step 10000
+                       right = TRUE)  # intervalli chiusi a destra (a, b]: il valore a destra è incluso, quello a sinistra è escluso
+
+
+# distribuzione di frequenza
+
+labels <- paste(format(head(breaks_median_price, -1), scientific = FALSE), 
+                "-|",
+                format(tail(breaks_median_price, -1), scientific = FALSE)) 
+# Il codice sopra crea etichette leggibili. Il simbolo "-|" indica che le classi sono aperte a sinistra e chiuse a destra.
+
+ni<-table(median_price_cl) # tabella delle frequenze assolute
+
+distr_freq_median_price_cl <- data.frame(Classe = labels,
+                                         Freq = as.numeric(ni),
+                                         Rel = as.numeric(ni)/N,
+                                         Cum = cumsum(as.numeric(ni)),
+                                         CumRel = cumsum(as.numeric(ni))/N)
+distr_freq_median_price_cl
+
+
+# barplot
+
+ggplot(distr_freq_median_price_cl, aes(x = Classe, y = Freq)) +
+  geom_bar(stat = "identity", fill = "skyblue", color = "blue") +
+  labs(title = "Distribuzione in classi del prezzo mediano di vendita ($)",
+       x = "Classi del prezzo mediano di vendita ($)",
+       y = "Frequenze assolute") +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  geom_text(aes(label = Freq), vjust = -0.5, size = 3.5)  # aggiunge le etichette sulle barre
+
+
+# indice di Gini
+gini_median_price <- Gini(dati$median_price)
+GiniCustom_median_price <- (1 - sum(distr_freq_median_price_cl$Rel^2))/((length(distr_freq_median_price_cl$Rel)-1)/length(distr_freq_median_price_cl$Rel))
+cat("Indice di Gini per median_price:", gini_median_price, "\n")
+cat("Indice di eterogeneità Gini Custom per median_price:", GiniCustom_median_price, "\n")
+
+# Calcolo dei principali percentili per median_price
+percentili_median_price <- quantile(dati$median_price, probs = c(0.25, 0.5, 0.75))
+cat("25° percentile (Q1):", percentili_median_price[1], "\n")
+cat("50° percentile (Mediana):", percentili_median_price[2], "\n")
+cat("75° percentile (Q3):", percentili_median_price[3], "\n")
+```
+**Commento e interpretazione dei risultati**
+
+Dalla distribuzione in classi del prezzo mediano si osserva che le vendite si concentrano prevalentemente nella fascia 120'000-160'000 dollari, con le frequenze più alte nelle classi 130'000-140'000 dollari (46 vendite), 140'000-150'000 dollari (39 vendite) e 150'000-160'000 dollari (39 vendite). 
+Le classi più basse (<90'000 dollari) e le più alte (>170'000 dollari) contano poche vendite, indicando che gli immobili di fascia molto bassa o molto alta rappresentano una minoranza del mercato.
+
+Il coefficiente di Gini misura la concentrazione di una distribuzione, in questo caso indica se vendite sono concentrate in poche classi di prezzo, oppure sono distribuite in modo uniforme.
+è stato ottenuto un coefficiente di Gini di circa 0.097 per la variabile 'median_price', molto vicino a 0, quindi quasi omogeneo, ma con alcune classi con più valori e alcune classi con meno valori.
+Visivamente, nell'istogramma questo è evidente dalla forma quasi ‘a campana’, con dispersione contenuta e maggiore concentrazione nelle fasce centrali.
+
+I percentili confermano questa concentrazione: il 50% centrale delle vendite si trova tra 117'300 e 150'050 dollari, confermando che la maggior parte del mercato è concentrata nelle fasce di prezzo medio.
+
+In sintesi, il mercato immobiliare texano, rispetto al prezzo mediano delle case, mostra una concentrazione moderata sui prezzi medi, con alcune variazioni verso le classi più alte e più basse, ma senza eccessive disuguaglianze.
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------
+
+## 5) Calcolo della probabilità
+
+Calcolo le probabilità come casi favorevoli diviso casi possibili, ovvero come frequenza relativa.
+- casi possibili corrispondono a N=dim(dati)[1]
+- casi favorevoli corrispondo alla frequenza assoluta
+Si può trovare la frequenza relativa nelle distribuzioni di frequenza, oppure ricalcolarla come segue.
+
+**A. Probabilità che presa una riga a caso di questo dataset essa riporti la città “Beaumont”**
+```{r}
+# Probabilità che una riga presa a caso di questo dataset riporti la città “Beaumont”
+fi_beaumont <- (table(dati$city)["Beaumont"]) / length(dati$city) # frequenza relativa
+print(as.numeric(fi_beaumont))
+```
+
+**B.Probabilità che presa una riga a caso di questo dataset essa riporti il mese di Luglio**
+```{r}
+# Probabilità che una riga presa a caso di questo dataset riporti il mese di Luglio
+fi_luglio <- (table(dati$month)["7"]) / length(dati$month) # frequenza relativa
+print(as.numeric(fi_luglio))
+```
+
+**C. Probabilità che presa una riga a caso di questo dataset essa riporti il mese di dicembre 2012**
+Questa è una probabilità composta, cioè la probabilità che si verifichino contemporaneamente (o in successione) due o più eventi.
+La probabilità composta si calcola come prodotto delle probabilità dei singoli eventi.
+
+```{r}
+fi_dicembre <- (table(dati$month)["12"]) / length(dati$month) # frequenza relativa
+fi_2012 <- (table(dati$year)["2012"]) / length(dati$year) # frequenza relativa
+prob_composta <- fi_dicembre * fi_2012
+print(as.numeric(prob_composta))
+```
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------
+
+## 6) Creazione di nuove variabili
+
+**A. Creazione di una nuova colonna che calcoli il prezzo medio degli immobili utilizzando le variabili disponibili.**
+
+prezzo medio ($) = volume (milioni di $) / sales
+cioè valore totale delle vendite diviso numero totale di vendite.
+
+NOTA. moltiplico 'volume' per 1e6 cioè per 1 milione in modo che l'unità di misura dei prezzi medi sia dollari, altrimenti i prezzi medi risulterebbero numeri decimali con unità di misura milioni di dollari.
+
+NOTA. Il boxplot della distribuzione di conversion_rate evidenzia:
+- mediana: linea nera orizzontale (mediana ≈ 0.11)
+- dal 1° al 3° quartile: porzione colorata di azzurro
+- Whiskers: linee verticali sopra e sotto il box, che indicano l’estensione “normale” dei dati (fino a 1.5×IQR dai quartili)
+- outliers: punti rossi
+
+```{r}
+# creazione della nuova colonna
+dati <- dati %>%
+  mutate(avg_price = (volume * 1e6) / sales)
+
+# riassunto statistico
+summary(dati$avg_price)
+
+# distribuzione di frequenze
+table(cut(dati$avg_price, breaks = 5))
+
+# Boxplot
+ggplot(dati, aes(y = avg_price)) +
+  geom_boxplot(fill = "steelblue", color = "black", alpha = 0.7, outlier.color = "red", outlier.shape = 16) +
+  labs(
+    title = "Distribuzione del prezzo medio degli immobili",
+    y = "Prezzo medio degli immobili"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+    axis.title.y = element_text(size = 14)
+  )
+```
+
+**Commento e interpretazione dei risultati**
+
+Il prezzo medio degli immobili presenta valori compresi tra un minimo di 97'010 dollari e un massimo di 213'234 dollari.
+Il 50% centrale delle osservazioni è compreso tra il primo quartile (132'939 dollari) e il terzo quartile (173'915 dollari), evidenziando una dispersione moderata dei prezzi medi attorno al valore centrale.
+
+La mediana è pari a 156'588 dollari e la media è pari a 154.320 dollari, indicando che il valore centrale della distribuzione si colloca attorno ai 155'000 dollari.
+La media lievemente inferiore alla mediana suggerisce una leggera asimmetria negativa della distribuzione, con una coda più pronunciata verso i valori più bassi.
+Questo è coerente con la presenza di alcuni periodi o città caratterizzati da prezzi medi relativamente contenuti.
+
+La distribuzione di frequenza per classi mostra una forte concentrazione dei valori nelle classi centrali: la classe 143.000–167.000 dollari è la più popolata (78 osservazioni), seguita dalle classi immediatamente adiacenti. Le classi estreme, inferiori a 120.000 dollari e superiori a 190.000 dollari, presentano frequenze sensibilmente più basse.
+
+In modo concirde con questi risultati, il boxplot del prezzo medio appare relativamente compatto, da circa 133.000 a 174.000 dollari, con una mediana leggermente spostata verso l’alto all’interno del box, coerentemente con la lieve asimmetria negativa.Il boxplot riflette una distribuzione relativamente concentrata sui prezzi medi, con variabilità contenuta e senza evidenti squilibri estremi.
+
+---------
+
+**B. Creazione di una nuova colonna che dia un’idea di “efficacia” degli annunci di vendita.**
+
+efficacia degli annunci di vendità = numero totale di vendite ('sales') / numero totale di annunci attivi ('listings')
+
+Questo calcolo indica quante vendite effettive ottieni per ogni annuncio pubblicato:
+- Valori vicini a 1 --> annunci molto efficaci: quasi ogni annuncio porta a una vendita
+- Valori vicini a 0 --> annunci poco efficaci: molti annunci non portano a vendite
+
+NOTA. Il boxplot della distribuzione di conversion_rate evidenzia:
+- mediana: linea nera orizzontale (mediana ≈ 0.11)
+- dal 1° al 3° quartile: porzione colorata di azzurro
+- Whiskers: linee verticali sopra e sotto il box, che indicano l’estensione “normale” dei dati (fino a 1.5×IQR dai quartili)
+- outliers: punti rossi
+
+```{r}
+# creazione della nuova colonna
+dati <- dati %>%
+  mutate(conversion_rate = sales / listings)
+
+# riassunto statistico
+summary(dati$conversion_rate)
+
+# distribuzione di frequenze
+# mostra quanti casi rientrano in ciascun intervallo di efficacia.
+table(cut(dati$conversion_rate, breaks = 5))
+
+
+# Boxplot
+ggplot(dati, aes(y = conversion_rate)) +
+  geom_boxplot(fill = "steelblue", color = "black", alpha = 0.7, outlier.color = "red", outlier.shape = 16) +
+  labs(
+    title = "Distribuzione dell'efficacia degli annunci",
+    y = "Efficacia annunci (conversion_rate)"
+  ) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 16, face = "bold"),
+    axis.title.y = element_text(size = 14)
+  )
+
+```
+
+**Commento e interpretazione dei risultati**
+
+La nuova variabile 'conversion_rate', che misura l’efficacia degli annunci come rapporto tra vendite e annunci attivi, mostra valori compresi tra 0.05 e 0.387.
+La mediana vicina alla media suggerisce che la distribuzione non è fortemente sbilanciata.
+Il 50% centrale dei valori si concentra tra il primo quartile e il terzo quartile, ovvero tra circa 0.09 e 0.135.
+Questo indica che, in media, meno di un annuncio su 8 porta a una vendita, confermando che l’efficacia degli annunci è relativamente bassa. 
+
+Tuttavia, esistono alcuni casi eccezionali:
+- Valori elevati fino a 0.387 indicano che in alcune città o periodi circa il 38% degli annunci porta a una vendita, evidenziando mercati o momenti particolarmente performanti.
+- Valori molto bassi (<0.08) segnalano periodi o aree in cui gli annunci sono poco efficaci, probabilmente a causa di bassa domanda o prezzi non competitivi.
+
+La tabella delle frequenze per classi conferma questa concentrazione: la maggior parte dei dati rientra nei primi due intervalli (0.05–0.118 e 0.118–0.185), mentre solo pochi casi superano 0.185.
+
+Il boxplot mostra chiaramente che la maggior parte dei valori di efficacia degli annunci è concentrata tra circa 0.09 e 0.135 (intervallo interquartile), confermando la distribuzione centrale evidenziata dai quartili.
+La mediana, rappresentata dalla linea all’interno del box, si trova intorno a 0.11, quindi metà degli annunci ha un’efficacia inferiore a questo valore.
+I “whiskers” estendono il range dei dati fino a valori più estremi, mentre alcuni outlier raggiungono circa 0.387, evidenziando pochi casi di alta efficacia degli annunci.
+
+In conclusione, il mercato non appare particolarmente efficiente circa la conversione annuncio-vendita, con la maggioranza degli annunci che genera vendite in misura limitata. Tuttavia, la presenza di picchi di alta efficacia suggerisce che alcune strategie o aree hanno performance molto superiori, rappresentando potenziali benchmark da analizzare e replicare.
+
+
+
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------
+
+## 7) Analisi condizionata
+
+Si usa il pacchetto dplyr o il linguaggio base di R per effettuare analisi statistiche condizionate per città, anno e mese. Si generano dei summary (media, deviazione standard) e si rappresentano graficamente i risultati.
+
+```{r}
+# Summary aggregato per città e anno (media su tutti i mesi) utile per commentare i dati
+summary_summary <- dati %>%
+  group_by(city, year) %>%
+  summarise(across(all_of(all_quantitative),
+                   list(mean = ~mean(.x, na.rm = TRUE),
+                        median = ~median(.x, na.rm = TRUE),
+                        sd = ~sd(.x, na.rm = TRUE),
+                        min = ~min(.x, na.rm = TRUE),
+                        max = ~max(.x, na.rm = TRUE)),
+                   .names = "{col}_{fn}"),
+            .groups = "drop")
+
+print(summary_summary)
+
+
+# 1. Funzione per calcolare statistiche di una variabile (da poter applicare a tutte le variabili).
+# Questa funzione prende in input il dataset (data) e il nome della variabile da analizzare (var)
+# e restituisce un tibble con media, mediana, deviazione standard, minimo e massimo raggruppati per city, year, month.
+  
+summarise_by_group <- function(data, var) {
+  var_sym <- rlang::sym(var)  # converte la stringa in simbolo per dplyr
+  
+  result <- data %>%
+    group_by(city, year, month) %>%  # raggruppa i dati per city, year e month
+    summarise(
+      mean_value   = mean(!!var_sym, na.rm = TRUE),
+      median_value = median(!!var_sym, na.rm = TRUE),
+      sd_value     = sd(!!var_sym, na.rm = TRUE),
+      min_value    = min(!!var_sym, na.rm = TRUE),
+      max_value    = max(!!var_sym, na.rm = TRUE),
+      .groups = "drop"
+    ) %>%
+    mutate(
+      data = as.Date(paste(year, month, "01", sep = "-")) # Aggiunge una colonna data
+    )
+
+  return(result)  # restituisce il dataframe
+}
+
+
+
+# 2. Funzione per creare un grafico dalla funzione precedente
+# La funzione prende l’output della funzione precedente e traccia l’andamento della media nel tempo per ciascuna città, con linee e punti distinti per ogni città.
+
+plot_time_series <- function(summary_data, var_label = "Valore") {
+  ggplot(summary_data, aes(x = data, y = mean_value, color = city)) +
+    geom_line(size = 1) +
+    geom_point(size = 2) +
+    scale_color_viridis_d(option = "D") + # palette colori
+    labs(
+      title = paste("Andamento mensile di", var_label),
+      x = "Data",
+      y = paste("Media di", var_label),
+      color = "Città"
+    ) +
+    theme_minimal()
+}
+
+
+# 3. Applico le due funzioni per ogni variabile quantitativa
+
+# Raggruppo tutte le variabili quantitative
+all_quantitative <- c(quantitative_discrete, quantitative_continue)
+
+# Ciclo for per creare summary e grafici per ciascuna variabile quantitativa
+for (var in all_quantitative) {
+  # summary
+  summary_var <- summarise_by_group(dati, var)
+  print(summary_var)
+  
+  # grafico
+  plot_var<-plot_time_series(summary_var, var)
+  print(plot_var)
+}
+```
+
+**Commento per ogni città**
+
+**Beaumont:**
+
+- Il numero delle vendite (sales) e il valore totale delle vendite (volume) sono in aumento costante, quindi il mercato è in crescita regolare.
+- Il numero di annunci attivi (listings) è in leggero calo, quindi la domanda sta aumentando rispetto all’offerta.
+- I prezzi (median_price) sono stabili (lievemente crescenti), indicano un mercato equilibrato, i prezzi rimangono stabili.
+- Il months inventory è in calo forte, quindi il mercato sta diventando più competitivo.
+
+**Bryan-College Station:**
+
+- Il numero delle vendite (sales) e il valore totale delle vendite (volume) sono in forte crescita con alta variabilità mensile.
+- Il numero di annunci attivi (listings) sono in calo marcato, quindi c'è una domanda elevata ma una scarsa offerta.
+- I prezzi (median_price) sono in aumento moderato.
+- Il months inventory è molto basso e in calo, questo indica un mercato altamente competitivo.
+
+**Tyler:**
+
+- Il numero delle vendite (sales) e il valore totale delle vendite (volume) crescono rapidamente in modo stabile.
+- Il numero di annunci attivi (listings) sono in lieve calo, la domanda è superiore all’offerta.
+- I prezzi (median_price) sono in chiaro aumento e il mercato è molto dinamico.
+- Il months inventory è in forte diminuzione, quindi il mercato è altamente competitivo.
+
+**Wichita Falls:**
+
+- Il numero delle vendite (sales) e il valore totale delle vendite (volume) sostanzialmente stabili, quindi il mercato è meno dinamico che nelle altre città.
+- Il numero di annunci attivi (listings) sono stabili, leggermente in calo, quindi il mercato è equilibrato.
+- I prezzi (median_price) sono in aumento moderato.
+- Il months inventory è stabile, leggermente crescente, quindi c'è equilibrio tra domanda e offerta.
+
+
+
+--------------------------------------------------------------------------------------------------------------------------------------------
+
+## 8) Creazione di visualizzazioni con ggplot2
+
+## #A. Boxplot per confrontare la distribuzione del prezzo mediano tra le città.
+```{r}
+# Calcolo statistiche per aggiungere sample size
+city_stats <- dati %>%
+  group_by(city) %>%
+  summarise(
+    n = n(),
+    median_price_city = median(median_price, na.rm = TRUE),
+    mean_price_city   = mean(median_price, na.rm = TRUE),
+    sd_price_city     = sd(median_price, na.rm = TRUE)
+  ) %>%
+  arrange(median_price_city)
+
+
+ggplot(dati, aes(x = city, y = median_price, fill = city)) +
+  geom_boxplot(outlier.shape = 21, outlier.fill = "red", alpha = 0.8) +
+  stat_summary(fun = median, geom = "point", size = 3, color = "black") +
+  stat_summary(fun = mean, geom = "point", size = 2.5, color = "blue", shape = 18) +
+  geom_text(
+    data = city_stats,
+    aes(
+      x = city,
+      y = min(dati$median_price, na.rm = TRUE) - 0.03 * diff(range(dati$median_price, na.rm=TRUE)),
+      label = paste0("n=", n)
+    ),
+    inherit.aes = FALSE, size = 3
+  ) +
+  scale_fill_viridis_d(option = "D") + # palette colori
+  labs(
+    title = "Confronto del prezzo mediano di vendita (median_price) tra città",
+    x = "Città (ordinate per mediana)",
+    y = "Prezzo mediano ($)",
+    caption = "Box = IQR, line = mediana; blu = media, rosso = outliers"
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+```
+
+**Interpretazione del grafico**
+
+Il boxplot confronta la distribuzione del prezzo mediano tra le città.
+Ogni box rappresenta l’intervallo interquartile (IQR, dal 25° al 75° percentile); la linea nera interna è la mediana.
+I punti rossi indicano la media della distribuzione per ogni città.
+I punti blu sono outlier.
+Le etichette sotto ciascuna scatola indicano la dimensione del campione.
+
+Il boxplot mostra chiaramente che le quattro città presentano livelli di prezzo mediano significativamente diversi, in particolare, dalla più economica alla più costosa abbiamo in ordine: Wichita Falls, Beaumont, Tyler, Bryan-College Station.
+Tutte le città hanno uguale numerosità campionaria (n=60), quindi i confronti sono affidabili.
+
+- Wichita Falls: mercato più economico (circa 100–110k$), distribuzione più dispersa e alcuni outliers superiori.
+- Beaumont: prezzi moderati (circa 125–135k$), stabilità elevata (IQR relativamente stretto) e pochi outliers.
+- Tyler: fascia di prezzi medio-alta (circa 135–150k$), mercato relativamente stabile (IQR moderato) e outliers presenti ma non eccessivi.
+- Bryan-College Station: mercato più costoso (circa 155–160k$), prezzi omogenei (IQR relativamente stretto) e pochi outliers superiori.
+
+
+### B. Grafici a barre per confrontare il totale delle vendite per mese e città.
+```{r}
+
+# Calcolo del totale vendite per città e mese
+sales_month_city <- dati %>%
+  group_by(city, year, month) %>%
+  summarise(total_sales = sum(sales, na.rm = TRUE), .groups = "drop") %>%
+  mutate(
+    date = as.Date(paste(year, month, "01", sep = "-"))
+  )
+
+# Gafico a barre
+ggplot(sales_month_city, aes(x = date, y = total_sales, fill = city)) +
+  geom_col(position = "stack") +
+  scale_fill_viridis_d(option = "D") + # palette colori
+  labs(
+    title = "Totale vendite mensili (stacked) per città",
+    x = "Mese",
+    y = "Totale vendite",
+    fill = "Città"
+  ) +
+  scale_x_date(date_labels = "%Y-%m", date_breaks = "3 months") +
+  theme_minimal(base_size = 12) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    plot.title = element_text(face = "bold", hjust = 0.5)
+  )
+
+
+```
+
+**Interpretazione del grafico**
+
+Il grafico mostra l’andamento mensile delle vendite dal 2009 al 2015, suddivise per città e impilate in un’unica barra per mese.
+Il grafico permette di valutare:
+
+*1. L’andamento stagionale annuale:*
+
+Si notano punte massime ogni anno tra maggio e agosto e un calo marcato nei mesi invernali, in particolare dicembre e gennaio. Questo andamento indica una stagionalità regolare, che si ripete negli anni, ed è tipo dei mercati immobiliari residenziali.
+
+*2. L'andamento generale nel tempo:*
+
+Nel periodo in studio, dal 2009 al 2015, si nota -al netto delle fluttuazioni stagionali- un trend generale di cresita. Il mercato complessivo è in espansione.
+
+*3. Il peso relativo di ogni città nel totale delle vendite:*
+
+- Tyler è spesso la città con la quota maggiore all’interno della barra mensile.
+- Bryan-College Station è la seconda per contributo totale.
+- Beaumont dà un contributo consistente ma leggermente inferiore rispetto a Tyler e Bryan-College Station.
+- Wichita Falls è la città con il contributo più basso.
+
+
+
+
+### C. Line charts per confrontare l’andamento delle vendite in periodi storici differenti.
+
+```{r}
+# Andamento storico delle vendite per città
+
+ggplot(dati, aes(x = date, y = sales, color = city)) +
+  geom_line(size = 1) +
+  geom_point(size = 1.5) +
+  scale_color_viridis_d(option = "D") +
+  labs(
+    title = "Andamento storico delle vendite per città",
+    x = "Data",
+    y = "Numero di vendite",
+    color = "Città"
+  ) +
+  theme_minimal(base_size = 12)
+
+```
+
+**Interpretazione del grafico**
+
+Il grafico mostra l’andamento mensile delle vendite dal 2010 al 2015 per ciascuna città. Ogni linea rappresenta una città e permette di confrontare sia l’evoluzione nel tempo sia la stagionalità.
+Come nel grafico precedente, si possono valutare:
+
+*1. L’andamento stagionale annuale:*
+
+La domanda immobiliare segue un ritmo stagionale tipico, comune a tutte le città, con picchi in primavera–estate (aprile–agosto) e cali in inverno (novembre–gennaio).
+
+*2. L'andamento generale nel tempo:*
+
+Nel periodo in studio, il mercato complessivo sembra in espansione: tutte le città mostrano un aumento generale delle vendite, con picchi che diventano progressivamente più alti (al netto delle fluttuazioni stagionali).
+
+*3. Differenze tra le città:*
+
+- Tyler è la città con il maggior numero di vendite per quasi tutto il periodo.
+- Bryan-College Station è il secondo mercato in forte espansione.
+- Beaumont è un mercato stabile e in crescita regolare.
+- Wichita Falls è un mercato più piccolo e più stabile.
+
+
+
+
+```{r}
+# Andamento delle vendite per mese, confrontando gli anni
+
+ggplot(dati, aes(x = month, y = sales, color = factor(year), group = year)) +
+  geom_line(size = 1) +
+  geom_point(size = 1.5) +
+  facet_wrap(~ city) +
+  scale_color_viridis_d(option = "C") +
+  labs(
+    title = "Andamento delle vendite per mese, confrontando gli anni",
+    x = "Mese",
+    y = "Vendite",
+    color = "Anno"
+  ) +
+  theme_minimal(base_size = 12)
+
+```
+
+--------------------------------------------------------------------------------------------------------------------------------------------
+
+## 9) Conclusioni
+
+Il mercato immobiliare texano presenta una forte variabilità nei valori totali delle vendite (volume), una distribuzione dei prezzi concentrata sulla fascia media, differenze chiare tra città e una stagionalità evidente. 
+
+L’analisi statistica fornisce indicazioni utili per comprendere dinamiche di mercato, ottimizzare strategie commerciali e indirizzare investimenti in modo informato e quantitativamente supportato. In particolare si possono fare le seguenti considerazioni, utili per chi si approccia al mercato immobiliare texano:
+
+1. Risulta favorevole fare investimenti immobiliari nelle città con mercati più dinamici (Tyler e Bryan-College Station), che offrono maggiori opportunità di crescita.
+
+2. Per le strategie di vendita è utile monitorare il 'conversion rate', che indica l'efficacia degli annunci di vendità. é utile ottimizzare le campagne pubblicitarie, specialmente nelle aree con tassi di conversione bassi.
+
+3. La concentrazione dei prezzi nella fascia media indica che per massimizzare le possibilità di vendita, ha senso posizionare il prezzo dell’immobile all’interno di questa fascia.
+
+4. Il mercato mostra una stagionalità marcata, con picchi in primavera-estate e cali in inverno. Questo fenomento può essere sfruttato facendo una pianificazione stagionale, con campagne promozionali e disponibilità di immobili ottimizzate per i picchi primaverili-estivi.
+
+--------------------------------------------------------------------------------------------------------------------------------------------

@@ -1,0 +1,2469 @@
+---
+title: "Modello Statistico per la Previsione del Peso Neonatale"
+author: "Greta Pagliari"
+date: "2025-11-19"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+# Impostazioni generali per il documento
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+
+# impostazioni possibili:
+# `echo=FALSE` → Nasconde il codice.
+# `warning=FALSE` → Nasconde warning generati durante l’esecuzione del chunk.
+# `message=FALSE` → Nasconde messaggi come quelli di `library()`.
+# `results='hide'` → Nasconde anche l’output dei risultati.
+
+
+# Impostazione del CRAN globale per poter scaricare i pacchetti
+options(repos = c(CRAN = "https://cran.r-project.org"))
+```
+
+```{r include=FALSE}
+# pacchetti necessari
+install.packages("moments")
+install.packages("ineq")
+install.packages("ggplot2")
+install.packages("dplyr") 
+install.packages("ggpubr")
+install.packages("gghalves")
+install.packages("knitr")
+install.packages("car")
+install.packages("MASS")
+install.packages("lmtest")
+install.packages("sandwich")
+install.packages("caret")
+
+library(moments)
+library(ineq)
+library(ggplot2)
+library(dplyr)
+library(ggpubr)
+library(gghalves)
+library(knitr)
+library(car)  # per LeveneTest
+library(MASS)
+library(lmtest)
+library(sandwich)
+library(caret)
+```
+
+
+**Azienda: Neonatal Health Solutions**
+
+**Obiettivo: creare un modello statistico in grado di prevedere con precisione il peso dei neonati alla nascita**, basandosi su variabili cliniche raccolte da tre ospedali. Il progetto mira a migliorare la gestione delle gravidanze ad alto rischio, ottimizzare le risorse ospedaliere e garantire migliori risultati per la salute neonatale.
+
+Il progetto si inserisce all'interno di un contesto di crescente attenzione verso la prevenzione delle complicazioni neonatali. La possibilità di prevedere il peso alla nascita dei neonati rappresenta un'opportunità fondamentale per migliorare la pianificazione clinica e ridurre i rischi associati a nascite problematiche, come parti prematuri o neonati con basso peso.
+
+```{r, results="asis"}
+
+# importazione del dataset
+dati_grezzi<-read.csv("neonati.csv")
+n<-nrow(dati_grezzi) # numero di righe = numerosità campionaria
+
+# controllo che non ci siano valori mancanti (NA) nel dataset
+valori_mancanti <- any(is.na(dati_grezzi))
+
+# Stampa leggibile: anteprima dataset + valori mancanti
+stampa_anteprima_na <- function(dati_grezzi) {
+  print(kable(head(dati_grezzi), 
+      caption = "Anteprima del dataset (prime 6 osservazioni)"))
+  cat("\n\n")
+  cat(ifelse(valori_mancanti, 
+             "Ci sono valori mancanti nel dataset.", 
+             "Non ci sono valori mancanti nel dataset."))
+  cat("\n\n")
+}
+
+stampa_anteprima_na(dati_grezzi)
+
+```
+
+NOTA. Durante l'analisi preliminare degli indici descrittivi e delle distribuzioni di frequenza (che viene mostrata successivamente) è emersa la presenza di valori anomali per l’età della madre (valori pari a 0 o 1), probabilmente dovuti a errori nell'inserimento dei valori nel dataset.
+Tali osservazioni sono state di seguito corrette, prima dell’analisi delle variabili, **sostituendo i valori 0 e 1 di età della madre con la mediana (calcolata per valori > 1)**. Si è scelto di sostituire i valori con la mediana invece di rimuovere le osservazioni per non perdere dati. La sostituzione dei valori non influisce sul modello e sulle sue prestazioni poichè la variabile età della madre non è inclusa nel modello.
+
+Non viene apportata la modifica direttamente sul dataset originale, ma ne viene creata una copia, in modo che non vengano sovrascritti i dati originali.
+
+```{r, results="asis"}
+
+# Creazione di una copia del dataset
+dati <- dati_grezzi
+
+# Correzione valori anomali per l'età della madre
+mediana_eta <- median(dati$Anni.madre[dati$Anni.madre > 1], na.rm = TRUE)
+dati$Anni.madre[dati$Anni.madre <= 1] <- mediana_eta
+
+```
+
+# 1. Raccolta dei Dati e Struttura del Dataset
+
+Il dataset contiene 2500 osservazioni riguardanti neonati provenienti da tre ospedali diversi. Le variabili raccolte includono:
+
+- **Età della madre**: Misura dell'età in anni --> variabile quantitativa discreta.
+
+- **Numero di gravidanze**: Quante gravidanze ha avuto la madre --> variabile quantitativa discreta.
+
+- **Fumo materno**: Un indicatore binario che distingue le madri in fumatrici e non fumatrici (0=non fumatrice, 1=fumatrice) --> variabile qualitativa nominale dicotomica.
+
+- **Durata della gravidanza**: Numero di settimane di gestazione --> variabile quantitativa discreta.
+
+- **Peso del neonato**: Peso del neonato alla nascita in grammi --> variabile quantitativa continua.
+
+- **Lunghezza e diametro del cranio**: Lunghezza del neonato e diametro craniale, misurabili anche durante la gravidanza tramite ecografie --> variabili quantitative continue.
+
+- **Tipo di parto**: Naturale o cesareo --> variabile qualitativa nominale dicotomica.
+
+- **Ospedale di nascita**: Ospedale 1, 2 o 3 --> variabile qualitativa nominale a tre categorie.
+
+- **Sesso del neonato**: Maschio o femmina --> variabile qualitativa nominale dicotomica.
+
+L’obiettivo principale è identificare quali di queste variabili sono più predittive del peso alla nascita, con un focus particolare sull’impatto del fumo materno e delle settimane di gestazione, che potrebbero indicare nascite premature.
+
+
+-----------------------------------------------------------
+
+*NOTA TECNICA. Il codice è spesso stato racchiuso in funzioni per garantire che l'output prodotto (risultati, tabelle e grafici) fosse leggibile nel file in formato html*
+
+----------------------------------------------------------
+
+# 2. Analisi e Modellizzazione
+
+## 2.1. Analisi Preliminare
+
+```{r}
+
+# classificazione delle variabili
+qualitative_nominali <- c("Fumatrici", "Tipo.parto", "Ospedale", "Sesso")
+quantitative <- c("Anni.madre", "N.gravidanze", "Gestazione", "Peso", "Lunghezza", "Cranio")
+quantitative_discrete<-c("Anni.madre", "N.gravidanze", "Gestazione")
+quantitative_continue<-c("Peso", "Lunghezza", "Cranio")
+
+```
+
+Di seguito vengono esplorate le variabili attraverso un'analisi descrittiva per comprenderne la distribuzione e identificare eventuali outlier o anomalie.
+
+### VARIABILI QUALITATIVE NOMINALI
+
+Per le variabili qualitative nominali si calcolano: frequenze assolute e relative, moda e indice di eterogeneità di Gini. L'indice di eterogeneità di Gini misura quanto le osservazioni sono distribuite tra le categorie, e va da 0 (tutte le osservazioni in una sola categoria: massima omogeneità) a 1 (le osservazioni sono distribuite equamente tra le categorie: massima eterogeneità).
+
+NOTA. Nel caso di variabili qualitative nominali le frequenze cumulate e cumulate relative non hanno significato statistico, quindi non sono state calcolate.
+
+Inoltre le frequenze sono rappresentate con un bar chart per renderne chiara la distribuzione. 
+
+```{r, results = "asis"}
+
+# Palette personalizzate
+palette_custom <- list(
+  Fumatrici = c("0" = "#87CEEB", "1" = "#90EE90"),
+  Tipo.parto = c("Nat" = "#F08080", "Ces" = "#90EE90"),
+  Ospedale = c("osp1" = "#87CEEB", "osp2" = "#F08080", "osp3" = "#90EE90" ),
+  Sesso = c("M" = "#87CEEB", "F" = "#F08080"))
+
+# Etichette leggibili per le modalità di alcune variabili
+labels_custom <- list(
+  Fumatrici = c("0" = "Non fumatrice", "1" = "Fumatrice"),
+  Tipo.parto = c("Nat" = "Naturale", "Ces" = "Cesareo"),
+  Ospedale = c("osp1" = "Ospedale 1", "osp2" = "Ospedale 2", "osp3" = "Ospedale 3"),
+  Sesso = c("M" = "Maschi", "F" = "Femmine"))
+
+# Etichette leggibili per variabili e titoli dei grafici
+axis_labels <- list(
+  Fumatrici = "Madri fumatrici",
+  Tipo.parto = "Tipo di parto",
+  Ospedale = "Ospedale",
+  Sesso = "Sesso neonati")
+
+
+# Ciclo per frequenze, moda e grafici
+
+for (var in qualitative_nominali) {
+  dati[[var]] <- as.factor(dati[[var]])
+  
+  # Nome leggibile della variabile
+  var_label <- axis_labels[[var]] %||% var
+  
+  # Se esistono etichette leggibili per le modalità nella lista labels_custom,
+  # le etichette sostituiscono i nomi originali.
+  # Si riassegna la palette colori alle nuove etichette
+  if (var %in% names(labels_custom)) {
+    levels(dati[[var]]) <- labels_custom[[var]][levels(dati[[var]])]
+  }
+  
+  # Distribuzione di frequenza
+  freq_ass <- table(dati[[var]])
+  freq_rel <- freq_ass / sum(freq_ass)
+  
+  dist_var <- data.frame(
+    Valore = names(freq_ass),
+    Frequenza = as.numeric(freq_ass),
+    Frequenza_relativa = round(as.numeric(freq_rel), 3),
+    stringsAsFactors = FALSE
+  )
+  
+  # Moda
+  moda_var <- names(freq_ass)[freq_ass == max(freq_ass)]
+  
+  # Indice di eterogenità di Gini 
+  # calcolato come: (1 - somma delle frequenze relative al quadrato) / (numero modalità - 1 / numero modalità)
+  Gini_index <- (1 - sum(freq_rel^2))/((length(freq_rel)-1)/length(freq_rel))
+  
+  # Stampa dei risultati leggibili
+  cat("#### ===== Variabile qualitativa nominale:", var_label, "=====\n\n")
+  print(kable(dist_var, caption = paste("Distribuzione di frequenza della variabile", var_label)))
+  cat("\n\n")
+  cat("**Moda:** ", paste(moda_var, collapse = ", "), "  \n")
+  cat("**Indice di eterogeneità di Gini:** ", round(Gini_index, 2), "\n\n")
+
+  # Creazione grafico
+  p <- ggplot(dati, aes(x = .data[[var]], fill = .data[[var]])) +
+    geom_bar(color = "black") +
+    geom_text(stat = "count",
+              aes(label = paste0(after_stat(count), 
+                                 "(", 
+                                 round(after_stat(count)/sum(after_stat(count))*100,1), 
+                                 "%)")),
+              vjust = -0.5) +
+    labs(title = paste("Distribuzione della variabile", var_label),
+         x = var_label,
+         y = "Frequenze assolute",
+         fill = "Categoria") +
+    theme_minimal()
+  
+  
+  # Applicazione della palette personalizzata e delle etichette leggibili
+  if (var %in% names(palette_custom)) {
+    pal <- palette_custom[[var]]
+    if (var %in% names(labels_custom)) {
+      names(pal) <- labels_custom[[var]][names(pal)]}
+  
+  p_stampa <- p + scale_fill_manual(values = pal)
+}
+
+  print(p_stampa)
+  
+  # per andare a capo dopo il grafico
+  cat("\n<hr>\n\n")
+}
+
+```
+
+**Interpretazione dei risultati - VARIABILI QUALITATIVE**
+
+- **Fumo materno**
+
+La grande maggioranza delle madri non fuma (95.8%), quindi il dataset è fortemente sbilanciato, come confermato dall'indice di eterogenità di Gini molto basso (≈ 0.16) che indica che la maggior parte dei dati sono concentrati in una categoria. La moda, in accordo con la distribuzione di frequenza e con l'indice di eterogeneità di Gini, corrisponde alle madri non fumatrici.
+Questa distribuzione è coerente con la letteratura: i dati Istat mostrano che negli ultimi anni la maggiornaza delle donne durante la gravidanza non fumano o smettono di fumare. La presenza del 4.2% di fumatrici permette comunque analisi comparative, ma con prudenza per via della bassa numerosità.
+
+- **Tipo di parto**
+
+La percentuale di cesarei (29.1%) è congrua con molti sistemi sanitari europei. La moda corrisponde ai parti naturali (frequenza 70.9%). Coerentemente, l'indice di eterogeneità di Gini (≈ 0.83) indica una eterogenità piuttosto elevata, quindi le due categorie sono ben rappresentate, anche se una è prevalente.
+
+- **Ospedale di nascita**
+
+Il campione è equamente distribuito tra i tre ospedali (frequenze: 32.6%, 34.0%, 33.4%) e questo lo rende ottimo per analisi comparative. Essendo molto simili le frequenze delle 3 categorie, per questa variabile la moda non è significativa. L'indice di eterogeneità di Gini prossimo a 1 conferma la quasi perfetta equità della distribuzione delle osservazioni nelle 3 categorie.
+
+- **Sesso del neonato**
+
+Distribuzione quasi perfettamente bilanciata (50.2% di femmine e 49.8% di maschi), confermata anche dall'indice di eterogeneità di Gini prossimo a 1. Non ci sono squilibri che possano compromettere analisi successive: il campione è ottimo per analisi comparative. Per questa variabile, essendo molto simili le frequenze delle 2 categorie, la moda non è significativa.
+
+
+### VARIABILI QUANTITATIVE DISCRETE E CONTINUE
+
+- A. Per le variabili quantitative vengono calcolati gli indici di posizione, variabilità e forma. 
+
+NOTA. La moda viene calcolata solo per variabili discrete perchè non è indicativa per variabili continue.
+
+NOTA. L'indice di asimmetria (skewness) e la curtosi (kurtosis) non sono indicative per variabili discrete che hanno poche modalità effettive o che hanno forte concentrazione su pochi valori. In questo studio questi indici non sono significativi per il numero di gravidanze.
+
+- B. Per le rappresentazioni grafiche delle variabili discrete è stato utilizzato il bar chart, che risulta la scelta più appropriata se questo tipo di variabili non ha troppe modalità, come in questo caso.
+Per le variabili continue invece è stato utilizzato l'istogramma. 
+
+- C. Per tutte le variabili quantitative è stato poi creato un boxplot per evidenziare mediana, quartili e outlier.
+
+```{r, results="asis"}
+
+# A. Funzione per calcolare gli indici di posizione, variabilità e forma
+
+calc_indices <- function(x, varname) {
+  
+  # Calcolo della moda solo variabili discrete
+  if (varname %in% quantitative_discrete) {
+    moda <- names(table(x))[table(x) == max(table(x))]
+  } else {
+    moda <- "Moda non indicativa per variabili continue"
+  }
+  
+  # Non calcolo skewness e kurtosis per la variabile N.gravidanze
+  if (varname != "N.gravidanze") {
+    skew <- skewness(x, na.rm = TRUE)
+    kurt <- kurtosis(x, na.rm = TRUE)
+  }
+  else {
+    skew <- "Skewness non indicativa per variabile di conteggio"
+    kurt <- "Kurtosis non indicativa per variabile di conteggio"
+    } 
+
+  # Creazione della lista degli indici
+  list(
+    Min = min(x, na.rm=TRUE),
+    Max = max(x, na.rm=TRUE),
+    Range = max(x, na.rm=TRUE) - min(x, na.rm=TRUE),
+    Mean = mean(x, na.rm=TRUE),
+    Median = median(x, na.rm=TRUE),
+    Mode = moda,
+    Q1 = quantile(x, 0.25, na.rm=TRUE),
+    Q3 = quantile(x, 0.75, na.rm=TRUE),
+    IQR = IQR(x, na.rm=TRUE),
+    SD = sd(x, na.rm=TRUE),
+    Variance = var(x, na.rm=TRUE),
+    CV = sd(x, na.rm=TRUE)/mean(x, na.rm=TRUE),
+    Skewness = skew,
+    Kurtosis = kurt,
+    Coefficiente_di_Gini = Gini(x)
+  )
+}
+
+# Funzione per trasformare la lista di indici in un data.frame per kable
+indices_to_df <- function(indices) {
+  data.frame(Indice = names(indices),
+             Valore = sapply(indices, function(x) if (is.numeric(x)) round(x, 2) else x), # arrotonda i numeri alla seconda cifra decimale
+    row.names = NULL
+  )
+}
+
+#---------------------------------------------------------------------
+
+# B. Ciclo principale che per ogni variabile quantitativa stampa gli indici, crea bar chart e boxplot
+
+# Etichette leggibili
+labels_anni_gravidanze <- list(Anni.madre = "Anni madre",
+                               N.gravidanze = "Numero gravidanze")
+
+results <- list()
+
+for (var in quantitative) {
+  
+  # lista di nomi leggibili delle variabili
+  var_label <- labels_anni_gravidanze[[var]] %||% var
+  
+  # Valori della variabile (per asse x e tabelle)
+  var_values <- names(table(dati[[var]]))
+  
+  indices <- calc_indices(dati[[var]], var)
+  
+  # 1. Stampa degli indici descrittivi in modo leggibile
+  cat("#### ===== Variabile quantitativa:", var_label, "=====\n\n")
+  print(kable(indices_to_df(indices),
+    col.names = c("Indice", "Valore"),
+    caption = paste("Indici descrittivi della variabile", var_label)))
+  
+  cat("\n\n")
+  
+  
+  # Grafici
+  
+  if (var %in% quantitative_discrete) {
+    
+    # 2.A. Bar chart per le variabili DISCRETE CON POCHE MODALITA'
+    p_bar <- ggplot(dati, aes(x = factor(.data[[var]]))) +
+      geom_bar(color = "black", fill = "#6A5ACD", alpha = 0.7) +
+      labs(title = paste("Bar chart della variabile", var_label),
+           x = var_label,
+           y = "Frequenza") +
+      theme_minimal()
+    
+    print(p_bar)
+  } 
+  
+  else {
+    
+    # 2.B. Istogramma + densità per le variabili CONTINUE
+    
+    p_hist <- ggplot(dati, aes(x = .data[[var]])) +
+      geom_histogram(bins = 30, color = "black", fill = "#6A5ACD", alpha = 0.7) +
+      labs(title = paste("Istogramma della variabile", var_label),
+           x = var_label, 
+           y = "Frequenza") +
+      theme_minimal()
+    
+    print(p_hist)
+  }
+
+  # 3. Boxplot per tutte le variabili quantitative
+  
+  p_box <- ggplot(dati, aes(y = .data[[var]])) +
+    geom_boxplot(fill = "#87CEEB") +
+    
+    # rimuove numeri asse x, che non hanno significato statistico:
+    scale_x_continuous(breaks = NULL) +
+    
+    labs(title = paste("Boxplot della variabile", var_label),
+         y = var_label) +
+    theme_minimal()
+  
+  print(p_box)
+  
+  cat("\n<hr>\n\n")
+  
+  
+  # 4. Distribuzione di frequenza solo per variabili DISCRETE
+  if (var %in% quantitative_discrete) {
+    freq_ass <- table(dati[[var]])
+    freq_rel <- freq_ass / sum(freq_ass)
+    
+    dist_var <- data.frame(
+      Valore = var_values,
+      Frequenza = as.numeric(freq_ass),
+      Frequenza_relativa = round(as.numeric(freq_rel), 2),
+      Frequenza_cumulata = cumsum(as.numeric(freq_ass)),
+      Frequenza_cumulata_relativa = round(cumsum(as.numeric(freq_rel)), 2)
+    )
+    cat(paste("#### Distribuzione di frequenza per", var_label, "\n\n"))
+    print(kable(dist_var,
+                caption = paste("Distribuzione di frequenza della variabile", var_label)))
+  }
+  
+  cat("\n<hr>\n\n")
+}
+
+```
+
+**Interpretazione dei risultati - VARIABILI QUANTITATIVE**
+
+**Età della madre**
+
+L’età media materna è di circa 28 anni, coerente con quella della popolazione italiana.
+La distribuzione mostra una forma a campana, quasi normale:
+
+- media ≈ mediana ≈ moda;
+
+- skewness ≈ 0, quindi la distribuzione è simmetrica.
+
+- Kurtosis ≈ 3.38, quindi la distribuzione è quasi mesocurtica, tipica di una distribuzione normale.
+
+La variabilità è moderata (deviazione standard ≈ 5.27 e coefficiente di variazione ≈ 0.19).
+Il boxplot ha evidenziato pochi valori estremi, e dei valori anomali come 0 e 1, che non sono plausibili per l’età della madre, ma sono probabilmente errori di inserimento. 
+
+NOTA. Dopo aver fatto questa osservazione, è stato inserito in blocco di codice di correzione in modo che i valori 0 e 1 di età della madre vengano sostituiti con la mediana (calcolata per valori >1). Si è scelto di sostituire i valori con la mediana invece di rimuovere le osservazioni per non perdere dati.
+
+**Numero di gravidanze**
+
+Il numero di gravidanze precedenti della madre è una variabile fortemente asimmetrica: la frequenza diminuisce rapidamente con l’aumentare del numero di gravidanze. La maggior parte delle donne è alla prima gravidanza, mentre gravidanze oltre la terza sono molto rare.
+Gli indici di posizione confermano questa concentrazione: moda = 0, mediana = 1, media ≈ 0.98.
+L’asimmetria della distribuzione è chiaramente visibile nel bar chart, mentre nel boxplot i valori oltre 2–3 gravidanze appaiono come “outlier”, pur essendo osservazioni plausibili.
+Circa il 77% delle madri ha avuto massimo 1 gravidanza, indicando un cluster molto concentrato.
+
+NOTA. Per la variabile numero di gravidanze, il boxplot è utile per evidenziare la mediana e gli outlier estremi, tuttavia la distribuzione è molto concentrata su pochi valori (0, 1, 2).
+
+**Durata della gravidanza (gestazione)**
+
+La maggior parte dei parti avviene tra 38 e 40 settimane di gestazione (con media circa 38.98, mediana 39, e moda 40), come atteso.
+Gli estremi inferiori (25–30 settimane) indicano nascite pretermine, presenti con bassa frequenza e quindi considerabili outlier attesi e clinicamente plausibili.
+La distribuzione è fortemente concentrata attorno al termine (IQR = 2 settimane) e presenta una coda a sinistra dovuta ai pochi casi molto prematuri. Skewness (= –2.07) e kurtosi (≈ 11.26) confermano numericamente questa concentrazione e la presenza di valori estremi.
+
+La distribuzione dei dati appare chiaramente nei grafici:
+
+- Nell'istogramma si vede come la distribuzione sia asimmetrica negativa con coda a sinistra;
+
+- Nel boxplot si vedono chiaramente gli outlier al di sotto delle 35 settimane.
+
+**Peso del neonato alla nascita**
+
+Peso medio alla nascita (≈ 3284 g) è coerente con i valori attesi tra 3000 g e 3500 g.
+La distribuzione è approssimativamente normale (come si può vedere osservando il bar chart), con leggera asimmetria negativa (skewness ≈ –0.65): i neonati molto leggeri rispetto alla media sono meno frequenti, mentre i neonati con peso leggermente superiore alla media sono più comuni.
+La kurtosi elevata (≈ 5) indica una distribuzione concentrata attorno alla media con code più pesanti rispetto a una normale perfetta, coerente con la presenza di pochi neonati molto leggeri o molto pesanti.
+Gli outlier sotto i 1500 g corrispondono principalmente a neonati pretermine, coerenti con i dati sulla gestazione (≤ 35 settimane).
+
+**Lunghezza del neonato alla nascita**
+
+La lunghezza media alla nascita è di circa 495 mm, con mediana pari a 500 mm, indicando una distribuzione concentrata attorno al valore medio.
+La distribuzione presenta forte asimmetria negativa (skewness ≈ –1.51) e alta kurtosi (≈ 9.5): pochi neonati molto piccoli creano una coda a sinistra, mentre la maggioranza dei neonati ha lunghezze vicine alla media.
+Gli outlier inferiori (310–350 mm) corrispondono a neonati pretermine, coerenti con le settimane di gestazione più basse.
+Rispetto al peso, la lunghezza mostra maggiore asimmetria perché nei neonati pretermine la lunghezza diminuisce proporzionalmente di più rispetto al peso.
+
+**Diametro del cranio del neonato alla nascita**
+
+Il diametro cranico medio è di circa 340 mm, con mediana coincidente, indicando distribuzione centrata attorno al valore medio.
+La distribuzione mostra asimmetria negativa moderata (skewness ≈ –0.79) e kurtosi elevata (≈ 5.95), riflettendo la presenza di alcuni neonati prematuri con cranio più piccolo.
+Gli outlier inferiori corrispondono a neonati pretermine, mentre gli outlier superiori sono pochi.
+
+----------------------------------------------------------------------------
+
+### A. Saggiare l'ipotesi che in alcuni ospedali si fanno più parti cesarei
+
+Si stuadiano due variabili categoriche (ospedale e tipo di parto) e si vuole verificare se sono associate, cioè se l'ospedale dove avviene il parto ha una relazione con il tipo di parto (naturale o cesareo).
+Si effettua un **test di indipendenza chi-quadrato (χ²)**, per verificare se è presente una relazione significativa tra due variabili.
+
+Il sistema di ipotesi è il seguente:
+
+- H₀: indipendenza, NON c'è associazione tra ospedale e tipo di parto, cioè la proporzione di parti cesarei e parti naturali è la stessa tra gli ospedali.
+
+- H₁: associazione, c'è associazione tra ospedale e tipo di parto, cioè la proporzione di parti cesarei e parti naturali cambia tra gli ospedali.
+
+Il livello di significatività alfa è fissato a 0.05.
+
+```{r, results = "asis", collapse = FALSE}
+
+# tabella di contingenza
+tabella <- table(dati$Ospedale, dati$Tipo.parto)
+colnames(tabella) <-c("Cesareo", "Naturale")
+row.names(tabella) <-c("Ospedale 1", "Ospedale 2", "Ospedale 3")
+
+#Trasformazione della tabella in formato adatto a ggballoonplot
+tabella_long <- as.data.frame(tabella)
+colnames(tabella_long) <- c("Ospedale", "Tipo di parto", "Frequenza")
+
+# test chi-quadrato (χ²)
+chi <- chisq.test(tabella)
+
+# Balloon plot
+p_ospedale_tipoparto <- ggballoonplot(tabella_long, x = "Tipo di parto", y = "Ospedale",
+size = "Frequenza", fill = "#6A5ACD") +
+  labs(title = "Balloon plot: Ospedale - Tipo di parto")+
+         theme_minimal()
+
+
+# Stampa leggibile dei risultati
+stampa_ospedale_tipoparto <- function(tabella, test_chi, grafico) {
+  cat("#### Tabella di contingenza Ospedale vs Tipo di parto\n\n")
+  print(kable(as.data.frame.matrix(tabella)))
+  
+  cat("\n\n#### Test chi-quadrato di indipendenza\n\n")
+  cat("Livello di significatività α = 0.05\n\n")
+  cat("```text\n") # stampa testo pre-formattato impedendo di compattare tutto su una riga
+  cat(paste(capture.output(test_chi), collapse = "\n"))
+  cat("\n```\n")
+  
+  cat("\n\n#### Balloon plot della tabella di contingenza\n\n")
+  print(grafico)
+}
+
+stampa_ospedale_tipoparto(tabella = tabella, test_chi = chi, grafico = p_ospedale_tipoparto)
+
+```
+
+Quando le variabili sono indipendenti, come in questo caso, la proporzione tra parti cesarei e naturali è uguale nei tre ospedali. Ci sono diverse evidenze che lo confermano:
+
+- La tabella di contingenza mostra frequenze simili per i parti naturali nei 3 ospedali e frequenze simili per i parti cesarei nei 3 ospedali.
+
+- Con il test del chi-quadrato (χ²) si ottiene un p-value = 0.5778, quindi maggiore del livello di significatività α = 0.05, quindi NON si rifuta l'ipotesi nulla di inpendenza.
+Questo significa che il test del chi-quadrato non evidenzia differenze significative nella frequenza di parti cesarei tra i tre ospedali.
+
+- Il balloon plot mostra che le variabili sono indipendenti perchè i palloncini relativi ai parti naturali sono approssimativamente della stessa grandezza e così anche i palloncini relativi ai parti cesarei.
+
+---------------------------
+
+
+### B. Saggiare l'ipotesi che la media del peso e della lunghezza di questo campione di neonati sono significativamente uguali a quelle della popolazione.
+
+Secondo Angelini Pharma, il peso medio di un neonato va dai 3200 g ai 3500 g, mentre la lunghezza media è di 505 mm per i maschi e 495 mm per le femmine. Si assumono come valori di riferimento della popolazione un peso di 3350g e una lunghezza media di 500 mm.
+
+Fonte: https://www.angelinipharma.it/aree-terapeutiche/igiene-e-cura-della-persona/salute-del-bambino/crescita-e-sviluppo/
+
+Si usa il **one-sample t-test** (test t a un campione) per verificare se c'è una differenza significativa tra la media del campione e la media della popolazione.
+
+Il sistema di ipotesi è il seguente:
+
+- H₀: μ campione = μ popolazione
+
+- H₁: μ campione ≠ μ popolazione
+
+Il livello di significatività α è fissato a 0.05.
+
+Per creare una rappresentazione grafica viene usato un boxplot, in cui:
+
+- Linea centrale rossa corrisponde alla mediana
+
+- Linea blu corrisponde alla media del campione
+
+- Linea tratteggiata nera corrisponde al valore μ₀, cioè la media della popolazione, che corrisponde a 3350 g per il peso e 500 mm per la lunghezza.
+
+- Dal 1° al 3° quartile: porzione colorata di azzurro, che quindi contiene il 50% centrale dei dati
+
+- Linee verticali sopra e sotto il box (whiskers) indicano la dispersione “normale” dei dati (fino a 1.5 × IQR)
+
+- Punti oltre i whiskers corrispondono agli outlier.
+
+NOTA. Al grafico è stato applicato un ingrandimento, che esclude parte dei whiskers e gli outliers, per dare maggiore risalto alle linee di mediana, media campionaria e media della popolazione e poterne apprezzare le differenze.
+
+```{r, results = "asis", collapse = FALSE}
+# Creo un ciclo for per effettuare il t test e creare una rappresentazione grafica per entrambe le variabili
+
+var_tt <- c("Peso", "Lunghezza")
+mu <- c(Peso = 3350, Lunghezza = 500)
+risultati_peso_lung <- list()
+
+
+for (v in var_tt) {
+  
+  # t-test
+  tt <- t.test(dati[[v]], mu = mu[v])
+  
+  # calcolo media del campione
+  media_campione <- mean(dati[[v]], na.rm = TRUE)
+  
+  # aggiungo colonna temporanea che assegna a tutte le osservazione lo stesso valore di x
+  # è necessario perchè geom_boxplot() e stat_summary() richiedono un valore x per posizionare il boxplot e le linee.
+  # In questo caso non abbiamo un valore di x perchè non stiamo confrontando più gruppi.
+  dati$tmp_x <- 1
+  
+  # boxplot con linee distinte e legenda
+  p <- ggplot(dati, aes(x = tmp_x, y = .data[[v]])) +
+    
+    # Costruzione della struttura del boxplot, con whiskers e outliers
+    geom_boxplot(aes(color = "Mediana"), 
+                 fill = "#87CEEB", width = 0.3, 
+                 outlier.shape = 16, 
+                 outlier.size = 1,
+                 color = "black", # bordi, whiskers e outliers neri
+                 show.legend = FALSE) +
+    
+    # Creazione linea della mediana
+    stat_summary(fun = median, geom = "crossbar", width = 0.5,
+                 aes(x = tmp_x, y = .data[[v]], color = "Mediana"),
+                 linewidth = 0.5, 
+                 show.legend = TRUE) +
+    
+    # Creazione linea della media campionaria
+    stat_summary(fun = mean, geom = "crossbar", width = 0.5, 
+                 aes(x = tmp_x, y = .data[[v]], color = "Media campione"),
+                 linewidth = 0.5,
+                 show.legend = TRUE) +
+    
+    # Creazione linea della media della popolazione
+    geom_hline(yintercept = mu[[v]],
+               aes(color = "Media popolazione"),
+               linetype = "dashed", 
+               linewidth = 0.5, 
+               show.legend = TRUE) +
+    
+    # Assegnazione dei colori alle linee di Mediana e Medie
+    scale_color_manual(name = "Linee di riferimento",
+                       values = c("Mediana" = "red", 
+                                  "Media campione" = "blue",
+                                  "Media popolazione" = "black")) +
+    
+    # Etichette leggibili
+    labs(title = paste("Boxplot di", v), x = NULL, y = v) +
+    
+    # rimuove numeri asse x, che non hanno significato statistico:
+    scale_x_continuous(breaks = NULL) +
+    
+    # Tema e legenda
+    theme_minimal() +
+    theme(legend.position = "right")
+    
+  # zoom verticale per ogni variabile
+  if (v == "Peso") {p <- p + coord_cartesian(ylim = c(2800, 3800))} 
+  else {p <- p + coord_cartesian(ylim = c(470, 530))}
+  
+  # Creazione della lista di risultati e grafici 
+  risultati_peso_lung[[v]] <- list(test = tt,
+                         grafico = p)
+}
+
+
+# Funzione per stampa leggibile di risultati e grafici
+
+stampa_tt_boxplot <- function(risultati_peso_lung, mu) {
+  
+  for (v in names(risultati_peso_lung)) {
+    
+    cat("#### Risultati dei one-sample t-test per la variabile ", v, "\n\n")
+    cat("Valore di riferimento μ₀ =", mu[v], "\n\n")
+    cat("Livello di significatività α = 0.05\n\n")
+    
+    cat("#### Test t di Student\n\n")
+    cat("```text\n") # stampa testo pre-formattato impedendo di compattare tutto su una riga
+    cat(paste(capture.output(risultati_peso_lung[[v]]$test), collapse = "\n"))
+    cat("\n```\n")
+    
+    cat("\n\n#### Rappresentazione grafica\n\n")
+    print(risultati_peso_lung[[v]]$grafico)
+    
+    cat("\n\n")
+  }
+}
+
+# rimuovo colonna temporanea
+dati$tmp_x <- NULL
+
+stampa_tt_boxplot(risultati_peso_lung, mu)
+
+```
+
+**Interpretazione dei risultati**
+
+Per la variabile Peso la media campionaria è circa 3284 g, mentre la media di riferimento (cioè quella della popolazione) μ₀ è di 3350 g. 
+P-value = 4.042e-10 << α, quindi rifiuto l'ipotesi nulla di uguaglianza. Significa che la media del peso del neonato nel campione è significativamente diversa (in questo caso inferiore) alla media di riferimento.
+
+Per la variabile Lunghezza la media campionaria è circa 495 mm, mentre la media di riferimento (cioè quella della popolazione) μ₀ è di 500 mm. P-value < 2.2e-16 << α, quindi rifiuto l'ipotesi nulla di uguaglianza. Significa che la media della lunghezza del neonato nel campione è significativamente diversa (in questo caso inferiore) alla media di riferimento.
+
+La media del campione, sia per la variabile Peso che per la variabile Lunghezza, è significativamente diversa dalla popolazione.
+Nei boxplot si può osservare che la media campionaria (linea blu) per entrambe le variabili è minore della media della popolazione (linea nera tratteggiata).
+
+NOTA. Essendo elevata la numerosità campionaria (n = 2500), il test t è estremamente sensibile: anche piccole differenze tra la media del campione e quella di popolazione risultano statisticamente significative. Sebbene il test confermi che il peso e la lunghezza dei neonati nel campione siano inferiori alla media della popolazione, la differenza pratica è relativamente contenuta (≈66 g per il peso, ≈5 mm per la lunghezza). I grafici sono infatti stati ingranditi per appezzare la differenza tra le medie.
+
+In conclusione, i test hanno significatività statistica, quindi le medie di Peso e Lunghezza del campione sono significativamente diverse da quelle popolazione; tuttavia l'entità clinica di tali differenze è trascurabile.
+
+-----------------------------------------
+
+
+### C. Saggiare l'ipotesi che le misure antropometriche sono significativamente diverse tra i due sessi
+
+Si usa il t-test per campioni indipendenti (**two-sample t-test**) per verificare se c'è una differenza significativa tra le medie di due gruppi indipendenti, in questo caso gruppo dei maschi e gruppo delle femmine.
+Le misure antropometriche che vengono prese in analisi sono Peso, Lunghezza e Cranio.
+
+```{r, results = "asis", collapse = FALSE}
+
+# variabili antropometriche
+var_antrop <- c("Peso", "Lunghezza", "Cranio")
+
+# lista dei risultati
+risultati_antrop <- list()
+
+
+# Ciclo per t test + violin plot + Density plot
+for (v in var_antrop) {
+  
+  # two-sample t-test per sesso
+  tt <- t.test(dati[[v]] ~ dati$Sesso)
+  
+  # violin plot + boxplot
+  
+  p <- ggplot(dati, aes(x = Sesso, y = .data[[v]])) +
+    theme_classic() +
+    
+    # metà violino a sinistra:
+    geom_half_violin(side = "l", fill = "#87CEEB", alpha = 0.7) +
+    
+    # metà boxplot a destra:
+    geom_half_boxplot(side = "r", width = 0.35, fill = "#F08080", alpha = 0.8) +
+    
+    labs(title = paste("Half-violin + half-boxplot di", v),
+         x = "Sesso", y = v)
+  
+  # Creazione della lista di risultati e grafici 
+  risultati_antrop[[v]] <- list(test = tt, grafico = p)
+}
+
+
+# Funzione per stampa leggibile di risultati e grafici
+
+stampa_var_antrop <- function(risultati_antrop) {
+  
+  for(v in var_antrop) {
+    cat("#### ===== Risultati del two-sample t-test per la variabile ", v, " nei due sessi =====\n\n")
+        cat("#### Test t di Student\n\n")
+        cat("Livello di significatività α = 0.05\n\n")
+    cat("```text\n") # stampa testo pre-formattato impedendo di compattare tutto su una riga
+    cat(paste(capture.output(risultati_antrop[[v]]$test), collapse = "\n"))
+    cat("\n```\n")
+    
+    cat("\n\n#### Rappresentazione grafica\n\n")
+    print(risultati_antrop[[v]]$grafico)
+    cat("\n\n")
+  }
+}
+
+stampa_var_antrop(risultati_antrop)
+
+```
+
+**Interpretazione dei risultati **
+
+- per la variabile Peso in relazione al Sesso, p-value < 2.2e-16 << α, quindi rifiuto l'ipotesi nulla di uguaglianza. Le medie di Peso tra maschi e femmine sono significativamente diverse.
+
+- per la variabile Lunghezza in relazione al Sesso, p-value < 2.2e-16 << α, quindi rifiuto l'ipotesi nulla di uguaglianza. Le medie di Lunghezza tra maschi e femmine sono significativamente diverse.
+
+- per la variabile Cranio in relazione al Sesso, p-value = 1.718e-13 << α, quindi rifiuto l'ipotesi nulla di uguaglianza. Le medie della misura Cranio tra maschi e femmine sono significativamente diverse.
+
+In sintesi, tutte le misure antropometriche analizzate mostrano differenze statisticamente significative tra i sessi. Questo risultato è concorde con le differenze biologiche tra i sessi.
+
+
+-----------------------------------------------------------
+
+## 2.2. Creazione del Modello di Regressione multipla
+
+Si sviluppa un modello di regressione lineare multipla che descrive la relazione tra una variabile risposta Y (Peso) e le variabili esplicative Xi rilevanti. Si quantifica l'impatto di ciascuna variabile esplicativa sul peso del neonato ed eventuali interazioni.
+
+Un modello di regressione lineare multipla è un modello statistico che consente di descrivere, quantificare e fare inferenza sulla relazione tra una variabile risposta (Y) e due o più variabili esplicative o regressori (Xi), assumendo che questa relazione sia (approssimativamente) lineare. In particolare il modello determina se esiste un legame di dipendenza asimmetrico, cioè un legame causa-effetto, tra la variabile risposta che subisce l'effetto e le variabili esplitaive che lo esercitano.
+
+Un modello di regressione lineare multipla assume:
+
+•	Linearità: La relazione tra Y e ciascuna X è lineare. 
+
+•	Normalità dei residui: Gli errori sono distribuiti normalmente --> Shapiro test
+
+•	Omoschedasticità(varianza costante) dei residui: Gli errori hanno varianza costante --> Breusch-Pagan Test
+
+•	Indipendenza (non correlazione) dei residui: Gli errori sono indipendenti tra loro --> Durbin-Watson Test
+
+•	Assenza di multicollinearità: Le X non devono essere fortemente correlate tra loro.
+
+Le assunzioni saranno verificate una volta creato e scelto il modello.
+
+### A. Test Shapiro-Wilk sulla variabile risposta
+
+Si utilizza il test di Shapiro-Wilk per verificare che la variabile risposta Peso sia approssimativamente normale.
+È utile farlo in anticipo perché eventuali allontanamenti dalla distribuzione normale della variabile risposta ricadono generalmente anche sui residui.
+
+Il sistema di ipotesi è il seguente:
+
+- H₀: i dati provengono da una distribuzione normale
+
+- H₁: i dati NON provengono da una distribuzione normale
+
+Il livello di significatività α è fissato a 0.05.
+
+Inoltre si calcolano l'asimmetria e la curtosi.
+
+```{r, results="asis"}
+
+# Funzione per test Shapiro-Wilk + density plot + stampa leggibile dei risultati
+
+shapiro_density_y <- function(y) {
+  
+  # 1. test Shapiro-Wilk:
+  
+  # Indici di asimmetria e curtosi
+  skew_y <- skewness(y)
+  kurt_y <- kurtosis(y)
+  
+  # test Shapiro-Wilk
+  shapiro_y <- shapiro.test(y)
+  
+  
+  # 2. Density plot + linea della normale teorica:
+  
+  # Media e deviazione standard
+  mu_y <- mean(y, na.rm = TRUE)
+  sigma_y <- sd(y, na.rm = TRUE)
+  
+  p_y <- ggplot(data.frame(Peso = y), aes(x = Peso)) +
+    geom_density(fill = "#87CEFA", alpha = 0.6, linewidth = 1) +
+    
+    # linea della normale teorica
+    stat_function(fun = dnorm,
+                  args = list(mean = mu_y, sd = sigma_y),
+                  linewidth = 1,
+                  colour = "red") +
+    
+    labs(title = "Density plot del Peso + curva normale teorica",
+         x = "Peso (Kg)",
+         y = "Densità") +
+    theme_minimal()
+  
+  
+  # 3. Stampa leggibile
+  
+  cat("#### Indici di forma della distribuzione del Peso\n\n")
+  
+  cat("Asimmetria (skewness): ", round(skew_y, 3), "\n\n")
+  cat("Curtosi (kurtosis): ", round(kurt_y, 3), "\n\n")
+  
+  cat("#### Test di normalità di Shapiro-Wilk per Peso\n\n")
+  cat("Livello di significatività α = 0.05\n\n")
+  cat("```text\n")
+  cat(paste(capture.output(shapiro_y), collapse = "\n"))
+  cat("\n```\n\n")
+  
+  cat("#### Rappresentazione grafica\n\n")
+  print(p_y)
+}
+
+# assegna il vettore dati$Peso all’argomento y della funzione
+# la divisione per 1'000 permette di convertire i grammi in Kg e avere un grafico più chiaro
+shapiro_density_y(dati$Peso / 1e3) 
+
+```
+
+**Intrepretazione dei risultati:**
+
+La distribuzione del peso neonatale presenta una moderata asimmetria negativa (skewness ≈ –0.65), indicando una coda più pronunciata verso i valori più bassi.
+La curtosi è elevata (kurtosis ≈ 5), suggerendo una distribuzione leptocurtica, più appuntita e con code più pesanti rispetto a una distribuzione normale.
+Il test di Shapiro–Wilk presenta un p-value < 2.2e-16 << α, quindi si rifiuta H₀, cioè il peso neonatale non può essere considerato normalmente distribuito.
+
+La rappresentazione grafica mostra la distribuzione della variabile Peso (in azzurro) confrontata con una distribuzione normale (in rosso) per evidenziarne la differenza.
+
+NOTA. Nonostante la variabile risposta Y non sia normale, il modello lineare multiplo è perfettamente utilizzabile se:
+
+- i residui sono approssimativamente normali (lo verificheremo più avanti nell'analisi);
+- o il campione è grande (in questo studio lo è: n = 2500). Con un campione grande infatti il test di Shapiro–Wilk è estremamente sensibile; anche scostamenti lievi dalla normalità portano a p-value molto piccoli. Questo rende il risultato statisticamente corretto, ma va sempre affiancato a una valutazione grafica.
+
+Il density plot è coerente con questi risultati numerici e mostra:
+
+- Forma della distribuzione del peso neonatale più appuntita rispetto alla normale (curtosi elevata).
+
+- Asimmetria negativa con coda a sinistra
+
+- Buona approssimazione centrale ma non globale: la distribuzione del peso segue abbastanza bene la normale teorica, eccetto nelle code e nel picco.
+
+In conclusione, data l’elevata numerosità campionaria, il rifiuto della normalità è atteso anche in presenza di scostamenti moderati, come confermato dalla rappresentazione grafica.
+
+
+-----------------------------------------------------------
+
+### B. Matrice di correlazione + scatterplot per variabili QUANTITATIVE
+
+La matrice di correlazione si può usare per le variabili numeriche (quantitative) e mostra le correlazioni a 2 a 2 delle variabili esplicative Xi tra loro e con la variabile risposta Y. 
+
+- coefficiente di correlazione = 1: massima correlazione positiva
+- coefficiente di correlazione = 0: nessuna correlazione lineare
+- coefficiente di correlazione = -1: massima correlazione negativa
+
+
+Di seguito viene mostrata una rappresentazione composta da matrice di correlazione + scatterplot:
+
+-	sulla diagonale sono mostrati i nomi delle variabili quantitative presenti nel data frame: la variabile risposta è Peso (che per comodità di lettura è stata posizionata per ultima), mentre le altre sono le variabili esplicative Xi.
+
+-	sotto la diagonale vengono mostrati i coefficienti di correlazione per ogni coppia di variabili, con lo sfondo di un'intensità di colore che aumenta proporzionalmente al valore della correlazione.
+
+-	sopra la diagonale vengono mostrati gli scatterplot, con una linea rossa che indica la tendenza della nuvola. NOTA: queste linee non sono date da regressioni lineari ma da funzioni polinomiali più complesse che tendono generalmente a fare overfitting. Sono soltanto indicative.
+
+```{r, results="asis"}
+
+# Selezione delle sole variabili numeriche (quantitative)
+dati_num <- dati[, quantitative]
+
+# Rinomina colonne con nomi leggibili
+names(dati_num) <- gsub("Anni.madre", "Anni madre", names(dati_num))
+names(dati_num) <- gsub("N.gravidanze", "N° gravidanze", names(dati_num))
+
+# Sposta Peso come ultima colonna per rendere il grafico più immediato da comprendere
+dati_num <- dati_num[ , c(setdiff(names(dati_num), "Peso"), "Peso")]
+
+
+# Funzione per pannello inferiore (coefficienti di correlazione)
+
+panel.cor <- function(x, y, digits = 2, prefix = "", cex.cor, ...) {
+  usr <- par("usr"); on.exit(par(usr))
+  par(usr = c(0, 1, 0, 1))
+  r <- cor(x, y, use = "complete.obs")
+  
+  
+  # Colore più intenso al crescere del valore assoluto del coefficiente di correlazione
+  
+  # Crea il gradiente
+  col_fun <- colorRamp(c("#ffffff", "#ff2400")) 
+  
+  # Calcola colore in base al valore assoluto del coefficiente
+  col_rgb <- col_fun(abs(r)) / 255
+  col_bg <- rgb(col_rgb[1], col_rgb[2], col_rgb[3])
+  
+  # Sfondo colorato
+  rect(0, 0, 1, 1, col = col_bg, border = NA)
+  
+  
+  # testo formattato:
+  txt <- format(c(r, 1), digits = digits)[1]
+  txt <- paste0(prefix, txt)
+  
+  # dimensione adattiva del testo:
+  if (missing(cex.cor)) cex.cor <- 0.8/strwidth(txt)
+  
+  text(0.5, 0.5, txt, cex = 1.5)
+}  
+
+# Scatterplot matrix
+pairs(dati_num, 
+      lower.panel = panel.cor, 
+      upper.panel = panel.smooth, # panel.smooth mostra la curva LOWESS (LOcally WEighted Scatterplot Smoothing), utile per evidenziare eventuali non linearità.
+      main = "Matrice di correlazione + scatterplot per le variabili quantitative")
+```
+
+**Interpretazione dei risultati**
+
+**Correlazioni tra la variabile risposta Peso e le variabili esplicative**
+
+- Correlazioni positive forti con le variabili: Lunghezza (coefficiente di correlazione = 0.8) , Cranio (coefficiente di correlazione = 0.7) e Gestazione (coefficiente di correlazione = 0.59). Gli scatterplot mostrano un andamento tendenzialmente lineare crescente (soprattutto per Lunghezza), a conferma della correlazione positiva forte.
+
+- Correlazioni praticamente nulle con le variabili: Anni della madre (coefficiente di correlazione vicino a 0 = -0.024) e Numero di gravidanze (coefficiente di correlazione vicino a 0 = 0.0024). Quindi queste due variabili sembrano poco rilevanti relativamente alla variabile Peso. Gli scatterplot mostrano punti sparsi senza un pattern evidente, a conferma della correlazione quasi nulla.
+
+**Correlazioni tra le variabili esplicative**
+
+C’è multicollinearità moderata tra alcune variabili predittive principali:
+
+- Lunghezza e Gestazione: coefficiente di correlazione = 0.62
+
+- Lunghezza e Cranio: coefficiente di correlazione = 0.60
+
+- Cranio e Gestazione: coefficiente di correlazione = 0.46
+
+Questa moderata correlazione tra le variabili Lunghezza, Cranio e Gestazione potrebbe dare problemi di multicollinearità, che verrà valuata successivamente tramite il VIF (Variance Inflation Factor).
+
+C'è anche una relazione debole-moderata tra le variabili Anni madre e N° gravidanze (coefficiente di correlazione = 0.38).
+
+------------------------------------------------------------------
+
+### C. Boxplot e test per le variabili QUALITATIVE
+
+#### Variabili qualitative a 2 livelli (Fumo, Tipo di parto, Sesso)
+
+1. Come requisito per il test t, per prima cosa si verifica se la variabile risposta nei due gruppi di ogni variabile qualitativa ha una distribuzione normale, con il test Shapiro-Wilk. Se la distribuzione non fosse normale:
+
+- Se il campione è sufficientemente grande (secondo il teorema del limite centrale), il test tende a essere robusto nonostante la non normalità della variabile risposta. In questo studio il campione (n = 2500) è sufficientemente grande.
+
+- Inoltre, nei modelli di regressione ci si concentra sulla normalità dei residui, poiché sono questi a rappresentare l'errore o la parte non spiegata. La normalità dei residui verrà verificata successivamente.
+
+Poi, per analizzare levariabili qualitative a 2 livelli si utilizzano:
+
+2. Boxplot per visualizzare la distribuzione della variabile risposta Peso rispetto ai gruppi.
+
+3. Two sample t-test per confrontare le medie dei due gruppi.
+
+Iniziamo con la verifica della normalità della variabile Peso nei 2 gruppi di ogni variabile.
+
+```{r, results="asis"}
+
+# 1. Verifica della normalità della variabile Peso nei 2 gruppi di ogni variabile
+
+# Variabili qualitative a 2 modalità
+var_2_mod <- c("Fumatrici", "Tipo.parto", "Sesso")
+
+# Lista risultati
+risultati_var_2_mod <- list()
+
+
+for (v in var_2_mod) {
+  
+  # livelli della variabile
+  livelli <- levels(factor(dati[[v]]))
+  
+  # t-test
+  tt <- t.test(Peso ~ dati[[v]], data = dati)
+
+  # Calcoliamo media e sd Per peso
+  mu_y = mean(dati$Peso, na.rm = TRUE)
+  sigma_y = sd(dati$Peso, na.rm = TRUE)
+  
+ 
+  # Creiamo il grafico
+  p <- ggplot(dati, aes(x = Peso / 1e3)) + # Peso in Kg
+    geom_density(fill = "#87CEFA", alpha = 0.6, linewidth = 1) +
+    
+    # linea della normale teorica
+    stat_function(fun = dnorm,
+                  args = list(mean = mu_y / 1e3, sd = sigma_y/ 1e3), # Peso in Kg
+                  colour = "red",
+                  linewidth = 1) +
+    
+    # Divide lo spazio grafico in 2 pannelli
+    facet_wrap(as.formula(paste("~", v)), nrow = 1) +
+    
+    labs(title = paste("Distribuzione di Peso per le modalità della variabile", v),
+         x = "Peso (Kg)",
+         y = "Densità") +
+    theme_minimal()
+  
+  # Salviamo il grafico nella lista
+  risultati_var_2_mod[[v]] <- list(test = list("t test" = tt), 
+                                   grafico = p)
+}
+
+
+# Funzione per stampare i risultati in modo leggibile
+stampa_risultati_var_2_mod <- function(risultati_var_2_mod) {
+
+  for (v in names(risultati_var_2_mod)) {
+    cat("#### ===== Test di normalità per la variabile ", v, "=====\n\n")
+    cat("Livello di significatività α = 0.05\n\n")
+
+    for (l in names(risultati_var_2_mod[[v]]$test)) {
+      cat("#####", v, "–", l, "\n\n")
+      cat("```text\n")
+      cat(paste(capture.output(risultati_var_2_mod[[v]]$test[[l]]), collapse = "\n")) 
+      cat("\n```\n\n")
+    }
+
+    cat("#### Rappresentazione grafica\n\n")
+    print(risultati_var_2_mod[[v]]$grafico)
+    cat("\n\n")
+  }
+}
+
+stampa_risultati_var_2_mod(risultati_var_2_mod)
+
+```
+
+**Interpretazione dei risultati**
+
+Il **test Shapiro–Wilk** rifiuta nettamente l’ipotesi di normalità in entrambe le modalità delle variabili:
+
+- Madre fumatrice (non fumatrice: p-value < 2.2e-16, fumatrice: p-value = 0.01867) 
+- Tipo di parto (naturale: p-value < 2.2e-16, cesareo: p-value = 6.43e-09)
+
+- Sesso del neonato (maschi e femmine: p-value < 2.2e-16)
+
+Il risultato è comune in un campione molto grande, che rende il test di Shapiro–Wilk estremamente sensibile. Anche lievissime deviazioni dalla normalità portano a p-value ≪ 0.05.
+
+In un modello di regressione lineare, non è necessario che la variabile risposta Peso sia normalmente distribuite nelle 2 modalità delle variabili risposta. Ma è necessario che:
+
+- il campione sia sufficientemente grande, e in questo studio lo è (n = 2500). Questo garantisce che il test t sia robusto.
+- i residui siano distribuiti normalmente e non ci siano forti eteroschedasticità (lo verificheremo successivamente nell'analisi).
+
+Il test di Shapiro–Wilk fornisce un’indicazione formale della non normalità, ma non consente di valutare la natura e l’entità delle deviazioni dalla distribuzione normale. Per questo motivo, l’analisi è stata integrata con una rappresentazione grafica tramite **density plot**, che ha permesso di evidenziare asimmetrie, code pesanti e differenze di forma tra i gruppi. Analizzando i density plot osserviamo che:
+
+- La distribuzione del Peso per la modalità **Non fumatrici** appare approssimativamente simmetrica e sostanzialmente unimodale. Tuttavia rispetto alla curva normale teorica si notano: una leggera asimmetria, un picco più pronunciato (maggiore concentrazione centrale) e code leggermente più pesanti. 
+A differenza della modalità Non fumatrici, la modalità **Fumatrici** mostra una distribuzione con: asimmetria più marcata, una coda destra più estesa, e una maggiore dispersione (in particolare verso valori di peso più elevati).
+
+NOTA. La distribuzione di frequenze fortemente sbilanciata tra madri non fumatrici (2396 osservazioni, 95.8%) e madri fumatrici (104 osservazioni, 4.2%) può influire sull’aspetto della densità, rendendo in questo caso il density plot del gruppo Fumatrici meno simile a una distribuzione normale.
+
+- La distribuzione del Peso per le modalità **Parto naturale** e **Parto cesareo** risulta molto simile: unimodale (caratterizzata da un unico picco centrale), con una asimmetria molto leggera, picco più accentuato della distribuzione normale e code lievemente più pesanti.
+
+- La distribuzione del Peso per le modalità **Maschi** e **Femmine** risulta molto simile: unimodale, asimmetria lieve, picco più pronunciato rispetto alla normale, code più pesanti e dispersione maggiore
+
+Sebbene il test di Shapiro–Wilk rifiuti formalmente la normalità in tutte le modalità analizzate, l’analisi grafica suggerisce che:
+
+- le deviazioni dalla normalità sono moderate, tipiche di dati biologici, e non indicano distribuzioni patologiche;
+
+- l'asimmetria è lieve;
+
+- tutte le modalità sono sostanzialmente unimodali;
+
+- non c'è presenza di anomalie evidenti.
+
+Nel contesto di un campione ampio (n = 2500), tali deviazioni sono compatibili con l’uso di test parametrici e modelli di regressione, a condizione che sia rispettata la normalità dei residui, che verrà valutata successivamente.
+
+Procediamo con two sample t-test e boxplot.
+
+```{r, results="asis"}
+
+# 2. TEST T + BOXPLOT per variabili qualitative a 2 livelli
+
+for(v in var_2_mod){
+  
+  cat("#### ===== Analisi della variabile:", v, "=====\n\n")
+  
+  # t-test
+  cat("##### T-test: confronto del Peso tra i due gruppi\n")
+  cat("Livello di significatività α = 0.05\n\n")
+  cat("```text\n")
+  cat(paste(capture.output(t.test(Peso/1e3 ~ dati[[v]], data=dati)), collapse = "\n"))
+  cat("\n```\n\n")
+  
+  # Media per gruppo
+  media_gruppo <- tapply(dati$Peso/1e3, dati[[v]], mean)
+  print(round(media_gruppo, 2))
+  cat("\n\n")
+  
+  # Boxplot
+  boxplot(Peso/1e3 ~ dati[[v]], 
+          data=dati,
+          col=c("#87CEEB","#F08080"),
+          xlab=v, 
+          ylab="Peso (Kg)",
+          main=paste("Distribuzione del Peso per", v))
+  
+  cat("\n\n<hr>\n\n") # per andare a capo dopo i grafici
+}
+
+```
+
+
+**Interpretazione dei risultati**
+
+Essendo rispettate le assunzioni di approssimativa normalità della distribuzione (come dimostrato con i density plot precedenti) e di grandezza del campione suffiente (n = 2500), è stato utilizzato il two sample t-test per confrontare le medie del Peso nei due gruppi di ogni variabile. Il two Sample t-test è appropriato anche in presenza di differenze di varianza tra i gruppi. 
+
+Il boxplot è utile per visualizzare la distribuzione della variabile risposta Peso rispetto ai gruppi.
+
+- La distribuzione di Peso non mostra nessuna differenza significativa tra i gruppi delle variabili Madre fumatrice (p-value ≈ 0.3) e Tipo di parto (p-value ≈ 0.9). L'ipotesi nulla di uguaglianza tra medie NON si rifiuta, quindi il Peso medio non mostra nessuna differenza statisticamente significativa tra madri fumatrici e non, e tra parti cesarei e neturali.
+
+- Diversamete, la distribuzione di Peso mostra una differenza significativa tra Maschi e Femmine (p-value < 2.2e-16). In questo caso l'ipotesi nulla di uguaglianza è rifiutata, infatti il peso medio è più alto nei maschi. Nel boxplot si vede chiaramente la differenza tra medie.
+
+
+------------------------------------------------------------------------
+
+
+#### Variabile qualitativa a 3 livelli (Ospedale):
+
+1. Come primo step si controlla se la variabile risposta Peso è approssimativamente normale in ciascuna modalità della variabile qualitativa Ospedale. Per ogni modalità, viene eseguito il test Shapiro-Wilk e viene mostrato un density plot.
+
+NOTA. Se lo studio è condotto su un campione molto grande (come in questo caso: n = 2500), il test di Shapiro–Wilk tenderà a rifiutare la normalità anche per deviazioni lievi. Per questo motivo l’analisi grafica con density plot è fondamentale per determinare se la deviazione dalla normalità è consistente o lieve.
+
+2. Si effettua poi un confronto delle medie tra i 3 ospedali. In un caso come questo, dove le modalità da confrontare sono più di 2, il two-sample t-test non è appropriato. Si può utilizzare l'ANOVA (Analysis of Variance), se sono rispettate le seguenti assunzioni:
+
+- La distribuzione della variabile risposta in ciascun gruppo deve essere approssimativamente normale (verificato attraverso test di Shapiro–Wilk, e soprattutto dall'analisi dei density plot). In ogni caso, se il campione è sufficientemente grande, l'assenza di normalità non compromette l'ANOVA.
+
+- I gruppi devono avere varianze simili. Questa condizione è verificabile con il test di Levene, che verrà fatto prima dell'ANOVA.
+
+3. Visualizzazione grafica con boxplot, che è ottimo per confrontare le distribuzioni di Peso tra gli ospedali.
+
+
+```{r, results="asis"}
+
+peso_ospedale <- function(y) {
+
+  # Palette colori
+  palette_ospedale <- c("Ospedale 1" = "#87CEFA",
+                        "Ospedale 2" = "#F08080",
+                        "Ospedale 3" = "#90EE90")
+
+  # 1. verifica che Peso per ciascun ospedale sia normale in tutte le modalità
+  
+  # test di Shapiro-Wilk
+  cat("#### Test di normalità di Peso per le modalità della variabile Ospedale\n\n")
+  cat("Livello di significatività α = 0.05\n\n")
+  
+  for(osp in sort(unique(dati$Ospedale))){
+    shapiro_y <- shapiro.test(dati$Peso[dati$Ospedale == osp])
+    
+    cat("##### Ospedale:", osp, "\n")
+    cat("```text\n")
+    cat(paste(capture.output(shapiro_y), collapse = "\n"))
+    cat("\n```\n\n")
+  }
+  
+  #Density plot con curve di distribuzione normale teorica
+  p_density <- ggplot(dati, aes(x = Peso /1e3, fill = Ospedale)) +  # Peso in Kg
+    geom_density(alpha = 0.8) +
+    facet_wrap(~Ospedale, nrow = 1) + # Divide lo spazio grafico
+    scale_fill_manual(values = palette_ospedale) + # colori personalizzati
+    
+    # Linea della normale
+    stat_function(fun = dnorm,
+                  args = list(mean = mu_y / 1e3, sd = sigma_y/ 1e3), # Peso in Kg
+                  colour = "#B81414",
+                  linewidth = 1) +
+    
+    labs(title = "Distribuzione di Peso per le modalità di Ospedale",
+         x = "Peso (Kg)", 
+         y = "Densità") +
+    theme_minimal()
+  
+  cat("#### Density plot\n\n")
+  print(p_density)
+  cat("\n\n")
+  
+
+  # 2. ANOVA: Confronto delle medie tra più gruppi
+  
+  #Test di Levene per omogeneità delle varianze
+  cat("#### Test di omogeneità delle varianze (Levene)\n\n")
+  cat("Livello di significatività α = 0.05\n\n")
+  levene_test <- leveneTest(Peso ~ Ospedale, data = dati)
+  cat("```text\n")
+  cat(paste(capture.output(levene_test), collapse = "\n"))
+  cat("\n```\n\n")
+  
+  # ANOVA per confrontare le medie tra ospedali
+  cat("#### ANOVA: confronto delle medie di Peso tra ospedali\n\n")
+  cat("Livello di significatività α = 0.05\n\n")
+  anova_mod <- aov(Peso ~ Ospedale, data = dati)
+  cat("```text\n")
+  cat(paste(capture.output(summary(anova_mod)), collapse = "\n"))
+  cat("\n```\n\n")
+  
+  
+  # 3. Boxplot per visualizzare le distribuzioni
+  p_box <- ggplot(dati, aes(x = Ospedale, y = Peso/1e3, fill = Ospedale)) +
+    geom_boxplot() +
+    scale_fill_manual(values = palette_ospedale) + # colori personalizzati
+    labs(title = "Distribuzione di Peso per le modalità della variabile Ospedale",
+         x = "Ospedale", y = "Peso (Kg)") +
+    theme_minimal()
+  
+  cat("### Boxplot\n\n")
+  print(p_box)
+  cat("\n\n\n")
+}
+
+peso_ospedale(dati$Peso / 1e3) # Peso in Kg
+
+```
+
+**Interpretazione dei risultati**
+
+**1. Test di Shapiro–Wilk + density plot per verificare che la distribuzione di Peso sia approssimativamente normale nei 3 ospedali.**
+
+In tutti e tre i gli ospedali il p-value è molto piccolo (p-value << 0.05), quindi si rifiuta l’ipotesi di normalità. 
+Tuttavia, il test di Shapiro–Wilk è estremamente sensibile quando la grandezza del campione è alta, e anche lievi deviazioni dalla normalità risultano significative.
+Per determinare l'entità della deviazione si osservano i density plot: le curve per i tre ospedali appaiono approssimativamente simmetriche e unimodali, quindi la violazione della normalità è lieve.
+L'approssimazione alla normalità, unità alla grandezza del campione, sono sufficienti per garantire la robustezza dell'ANOVA.
+
+**2. Test di Levene per verificare l'omogeneità delle varianze dei gruppi.**
+
+Il p-value del test di Levene risulta circa 0.55, quindi maggiore di α. L'ipotesi nulla di uguaglianza delle varianze NON viene rifiutata. Quindi è rispettata l'assunzione di omogeneità per l'ANOVA.
+
+**3. ANOVA per verificare se i pesi nei 3 ospedali sono uguali.**
+
+Il risultato dell'ANOVA mostra un p-value di circa 0.18, maggiore del livello di significatività α. Questo significa che l'ipotesi nulla di uguaglianza NON viene rifiutata, e non vi sono evidenze statisticamente significative di differenze tra le medie del peso nei tre ospedali.
+
+**4. Boxplot per visualizzare la distribuzione e il confronto tra gruppi.**
+
+Il boxplot conferma le considerazioni fatte analizzando density plot, test di Levene e ANOVA. I box dei tre ospedali risultano: di ampiezza simile (quindi IQR e dispersione simili) e con mediane molto vicine, confermando l’assenza di differenze rilevanti tra gli ospedali.
+
+
+----------------------------------------------
+
+
+### D. Creazione del modello di regressione lineare multipla
+
+Creare un modello di regressione lineare multipla significa costruire un modello statistico che consente di descrivere, quantificare e fare inferenza  sulla relazione tra una variabile risposta (Y) e più variabili esplicative o regressori (Xi), assumendo che questa relazione sia (approssimativamente) lineare. 
+
+In questo studio il modello studia come cambia il Peso medio di un neonato al variare di più fattori contemporaneamente.
+
+Un modello di regressione lineare multipla è rappresentato dall'equazione:
+
+Y = β0 + β1 X1 + β2 X2 + ... + βi Xi + ε
+
+Dove, β0 è l'intercetta (costante), βi sono i coefficienti di regressione, e ε è l'errore casuale.
+
+L'obiettivo del modello è stimare l'intrecetta e i coefficienti di regressione in modo da capire quali variabili esplicative hanno un effetto significativo sulla variabile risposta Y. Ogni coefficiente di regressione βi rappresenta la variazione media di Y per ogni incremento unitario della rispettiva X, tenendo fissate le altre variabili.
+β0 rappresenta la media della Y quando tutte le variabili esplicative assumono un valore di zero.
+
+Per ogni coefficiente di regressione si valutano: il segno (effetto di incremento o decremento sulla variabile risposta), il valore assoluto (dimensione dell’effetto), e il p-value (effetto è statisticamente rilevante o no).
+
+Il sistema di ipotesi è il seguente:
+
+•	H₀: βk = 0 --> non c'è nessuna relazione tra Xk e Y
+
+•	H₁: βk ≠ 0 --> c’è relazione tra Xk e Y
+
+
+```{r, comment = NA}
+
+# stima di un modello di regressione lineare multipla con tutte le variabili Xi
+mod1 <- lm(Peso ~ Anni.madre + N.gravidanze + Fumatrici + Gestazione + Lunghezza + Cranio + Tipo.parto + Ospedale + Sesso, data = dati)
+
+summary(mod1)
+
+```
+
+**Interpretazione dei risultati**
+
+È stato stimato un modello di regressione lineare multipla con variabile risposta Peso del neonato (in grammi) e con variabili esplicative le caratteristiche materne, neonatali e cliniche.
+
+Il modello è globalmente altamente significativo (con p-value < 2.2e-16): almeno una delle variabili esplicative è significativamente associata al Peso.
+
+In un modello di regressione lineare multiplo, il coefficiente di determinazione (R²) è una misura della bontà di adattamento del modello, che misura la percentuale di varianza della variabile risposta Y spiegata dalle variabili esplicative Xi del modello.
+Il coefficiente di determinazione aggiustato (R² aggiustato) corregge il valore del coefficiente di determinazione in base al numero di variabili incluse, penalizzando l'inserimento di predittori irrilevanti per evitare l'overfitting.
+
+Nel modello 1 creato, si osservano un R² e un R² aggiustato di circa 0.73, quindi circa il 73% della variabilità del Peso è spiegata dalle variabili incluse nel modello (al momento tutte le variabili del dataset). Essendo questo un valore elevato, indica un’ottima capacità descrittiva del modello.
+
+Un errore residuo di circa 274 grammi indica che l’errore medio di previsione del Peso è di circa ± 274 grammi.
+
+Nella tabella dei coefficienti vengono mostrate le stime dei coefficienti di regressione β per tutte le variabili, che rappresentano gli effetti marginali di ogni singola variabile sulla variabile risposta. Per ogni stima si analizzano: segno, valore assoluto e significatività.
+
+Le 5 colonne della tabella dei coefficienti indicano in ordine:
+
+-	le stime dell'intercetta e dei coefficienti di regressione;
+
+-	gli standard error relativi alle stime;
+
+-	i valori del test t utilizzato per saggiare l’ipotesi di significatività dei coefficienti;
+
+-	il p-value relativo al test t. Gli asterischi indicano diversi livelli di significatività: * - α=0.05, ** - α=0.01,*** - α=0.001.
+
+Analisi dell'effetto delle variabili esplicative sulla variabile risposta:
+
+- **Età della madre** presenta p-value = 0.49 > α, quindi la variabile NON mostra un effetto significativo sulla variabile Peso.
+
+- **Numero di gravidanze** presenta p-value = 0.014 < α, quindi l'effetto sulla variabile Peso è significativo. Tuttavia, il coefficiente di regressione (β = 11.4) indica che per ogni aumento unitario di numero di gravidanze, il Peso medio alla nascita aumenta di 11.4 grammi: un dato molto inferiore all'errore residuo del modello (circa ± 274 grammi), quindi si tratta di un un aumento clinicamente molto modesto.
+
+- **Fumo materno**, con p-value = 0.27 > α, NON risulta significativamente associato al Peso.
+
+- **Durata della gestazione**, con p-value < 2e-16 << α, indica un **effetto significativo** sul Peso medio del neonato. In particolare per ogni settimana di gestazione in più il Peso medio aumenta di 32.5 grammi (β = +32.5).
+
+- **Lunghezza alla nascita** e **Circonferenza cranica alla nascita**, entrambi con p-value < 2e-16 << α, indicano un **effetto significativo** sul Peso medio del neonato: per ogni millimetro in più di lunghezza e di circonferenza cranica il Peso medio aumenta di circa 10 grammi (β della lunghezza = +10.3 e β del cranio = +10.5).
+
+- **Tipo di parto**: il parto naturale (β = +29.5, p-value = 0.015 < α) ha un effetto significativo sul Peso medio del neonato, è associato a un Peso medio leggermente superiore rispetto al cesareo, ma l'aumento è clinicamente molto modesto.
+
+- **Ospedale**: La differenza della media del Peso neonatale nell'Ospedale 2 rispetto all'Ospedale 1, con p-value = 0.4 > α NON è significativa. Tra l'Ospedale 3 e l'Ospedale 1 invece la differenza della media del Peso è significativa (p-value ≈ 0.04, leggermente < α), ma NON clinicamente rilevate, poichè i neonati ell'Ospedale 3 pesano in media 28 grammi in più dell'Ospedale 1: un valore molto piccolo rispetto all'errore residuo (≈ 274 grammi).
+
+- **Sesso del neonato**: i neonati maschi presentano un Peso medio **significativamente** più elevato rispetto alle femmine (β = +77.5, p-value = 5.07e-12 << α).
+
+In conclusione, il modello di regressione lineare multipla evidenzia che il Peso alla nascita è fortemente associato alle caratteristiche antropometriche neonatali (lunghezza e circonferenza cranica), alla durata della gestazione e al sesso del neonato. Il modello spiega circa il 73% della variabilità totale del Peso, mostrando un’elevata capacità descrittiva.
+
+
+
+
+-----------------------------------------------------------
+
+## 2.3. Selezione del Modello Ottimale
+
+La selezione del modello di regressione è stata effettuata partendo dal modello completo, coerentemente con l’analisi esplorativa preliminare.
+L’obiettivo è individuare un modello parsimonioso che mantenga una buona capacità esplicativa.
+
+- **A. Procedura automatica stepwise.**
+
+A partire dal modello completo, sono stati costruiti modelli progressivamente ridotti eliminando uno o più regressori alla volta.
+Ogni modello ridotto è stato confrontato con il modello più complesso mediante ANOVA (test F) e criteri di informazione di Akaike (AIC) o di Bayes (BIC).
+
+**ANOVA (o test F) per l'analisi della varianza:**
+
+L’ANOVA è un test statistico che confronta la riduzione della varianza residua dei due modelli. Il sistema di ipotesi è il seguente:
+
+- H₀: tutti i coefficienti (𝛽) delle variabili eliminate sono nulli.
+
+-	H₁: almeno uno dei coefficienti (𝛽) delle variabili eliminate è diverso da zero.
+
+Con p-value ≥ α, NON si rifiuta H₀, quindi il modello ridotto non spiega significativamente meno varianza. Secondo il principio di parsimonia, si preferisce il modello con meno variabili.
+
+Con p-value < α, si rifiuta H₀, quindi il modello ridotto spiega significativamente meno varianza e si preferisce il modello più complesso.
+
+
+**AIC (Akaike's information criterion) e BIC (Bayesian Information Criterion):**
+
+AIC e BIC sono metodi statistici per confrontare modelli tenendo conto sia della bontà di adattamento sia della complessità. Il criterio BIC penalizza maggiormente la complessità ed è quindi più conservativo.
+Il modello migliore è quello con un valore più basso di AIC o BIC.
+
+NOTA. La rimozione di una variabile viene confermata se: l'ANOVA ha p-value > 0.05 (quindi il test non è statisticamente significativo) e se AIC/BIC non aumentano.
+
+- **B. Analisi critica dei regressori rimasti dopo la selezione tramite BIC.**
+
+Una volta verificato che la rimozione di alcune variabili non peggiora significativamente il modello, viene valutata anche la rilevanza clinica degli effetti stimati, confrontando l’entità dei coefficienti con l’errore residuo del modello.
+
+- **C. Controllo della multicollinearità.**
+
+La multicollinearità è una situazione in cui due o più variabili esplicative (= regressori) di un modello di regressione sono fortemente correlate tra loro. Questo implica che i coefficienti β sono molto instabili e sensibili a piccole variazioni del modello, quindi potenzialmente fuorvianti, inesatti.
+
+La presenza di multicollinearità viene valutata tramite:
+
+- matrice di correlazione per le variabili quantitative, 
+
+- VIF (Variance Inflation Factor) che misura quanto l'aumento della varianza dei coefficienti di regressione (β) sia dovuta alla correlazione tra regressori. Valori di VIF compresi tra 1 e 5 sono generalmente considerati accettabili; mentre con VIF > 5 potrebbero esserci dei problemi di multicollinearità.
+
+- **D. Controllo di possibili effetti non lineari.**
+
+Effetti non lineari si verificano quando l’effetto marginale dei regressori (variabili esplicative) sulla variabile risposta non è costante, ma cambia a seconda del livello del regressore, oppure può esserci un valore soglia o un punto di massimo/minimo. In questo caso la relazione non è rappresentata da una retta, ma da una curva.
+Le relazioni lineari e non lineari tra regressori QUANTITATIVI e variabile risposta si visualizzano con uno scatterplot.
+
+- **E. Controllo delle intreazioni tra regressori.**
+
+Un’interazione tra due regressori significa che l’effetto di uno sulla variabile risposta dipende dal livello dell’altro.
+
+
+**Si procede un punto alla volta.**
+
+#### **A. Selezione automatica del modello migliore tramite BIC + ANOVA**
+
+Come primo passo nella selezione del modello, si utilizza una procedura automatica di selezione stepwise basata sul criterio di informazione di Bayes (BIC).
+La procedura parte dal modello completo ed esplora modelli alternativi aggiungendo o rimuovendo regressori, selezionando il modello che minimizza il BIC. è stato utilizzato il BIC, e non l'AIC, perchè il BIC penalizza maggiormente i modelli complessi, seguendo più fedelmente il principio di parsimonia.
+
+La procedura stepwise fornisce un’indicazione esplorativa sulla selezione delle variabili, ma la scelta finale del modello viene validata mediante il confronto tra modelli annidati (ANOVA), criteri informativi e valutazioni di rilevanza clinica.
+
+```{r, comment=NA}
+
+# Stampa leggibile dei risultati
+stampa_mod2 <- function() {
+  
+  # selezione automatica del modello migliore tramite BIC
+  cat("===== Procedura stepwise automatica basata su BIC =====\n\n")
+  mod2 <- MASS::stepAIC(mod1,
+                      direction = "both",
+                      k = log(n)) # questo equivale al BIC (con n = numerosità campionaria)
+  cat("\n\n")
+  
+  # summary del modello 2
+  cat("===== Summary del modello 2 =====\n\n")
+  print(summary(mod2))
+  cat("\n\n")
+  
+  # anova per il confronto del modello 2 con il modello 1
+  cat("===== ANOVA del modello 2 vs modello 1 =====\n\n")
+  print(anova(mod1, mod2))
+  cat("\n\n")
+}
+
+stampa_mod2()
+
+```
+
+**Interpretazione dei risultati - modello 2**
+
+Analizzando gli step della procedura stepwise bidirezionale automatica basata su BIC, si osserva che sono state eliminate in ordine le variabili: Età della madre, Fumo materno, Ospedale e Tipo di parto. Questo risultato è coerente con l'analisi esplorativa preliminare, che aveva individuato queste variabili nel modello completo come: non significative o debolmente significative, e con effetti molto modesti sulla variabile peso del neonato.
+
+Il modello finale ottenuto con la procedura stepwise mostra R² e R² aggiustato di circa 0.73, quindi spiega circa il 73% della variabilità del Peso, praticamente identico al modello completo, ma con meno regressori. Per il principio di parsimonia: a parità di R² e R² aggiustato, è da preferire il modello con meno regressori.
+
+Residual standard error (RSE) ≈ 275 g è invariato rispetto al modello completo. Quindi la semplificazione non peggiora la capacità predittiva.
+
+**Interpretazione dei risultati - coefficienti**
+
+- Durata della gestazione, Lunghezza alla nascita, Circonferenza cranica e Sesso del neonato (tutti con p-value <<  α) hanno un effetto statisticamente e clinicamente significativo.
+
+- Numero di gravidanze (β = +12.5 g, p-value = 0.004): ha un effetto statisticamente significativo, ma clinicamente modesto rispetto all’errore residuo. La variabile è stata mantenuta dal BIC, ma nello step successivo verrà analizzata in modo più approfondito.
+
+**Interpretazione dei risultati - ANOVA**
+
+L’ANOVA confronta il modello completo (con tutte le variabili: modello 1) e il modello selezionato dal BIC (modello 2). Il p-value = 0.004 < α, indica che il modello 2 spiega significativamente meno varianza del modello 1.
+
+Tuttavia, il modello 2 -come già osservato- presenta R² e R² aggiustato di circa 0.73, praticamente identico al modello 1. 
+
+Questo significa che, anche se esiste una differenza statistica, la semplificazione è accettabile dal punto di vista pratico e predittivo, e conferma che il modello 2 mantiene la maggior parte dell’informazione del modello 1. Per il principio di parsimonia viene scelto il modello 2.
+
+-------------------------------------------------
+
+
+#### **B. Analisi critica dei regressori rimasti dopo la selezione tramite BIC**
+
+Si controlla se la variabile Numero di gravidanze sia utile al modello o se sia meglio toglierla. La variabile è messa in discussione per 3 motivi:
+
+- Durante l'analisi esplorativa, nella matrice di correlazione, il Numero di gravidanze ha mostrato una correlazione quasi nulla con il Peso neonatale, e lo scatterplot non ha mostrato un pattern evidente. Questo suggeriva che ci fosse una debole relazione marginale.
+
+- Nel modello 1 e nel modello 2 il Numero di gravidanze ha mostrato un β rispettivamente di circa 11.4 e 12.5 g per gravidanza, molto inferiore all'errore residuo di circa 275 g. Questo suggeriva un effetto clinico trascurabile.
+
+- Con una numerosità campionaria grande (n = 2500), anche effetti molto piccoli diventano statisticamente significativi (p-value < α sia nel modello 1 che nel modello 2).
+
+
+```{r, comment = NA}
+
+# Stampa leggibile dei risultati
+stampa_mod3 <- function() {
+  
+  # riporto il modello 2, che era stato creato dentro una funzione per permettere la stampa leggibile
+  mod2 <- lm(Peso ~ N.gravidanze + Gestazione + Lunghezza + Cranio + 
+    Sesso, data = dati)
+  
+  # creazione del modello 3
+  mod3 <- update(mod2, . ~ . - N.gravidanze)
+  
+  # summary del modello 2
+  cat("===== Summary del modello 3 =====\n\n")
+  print(summary(mod3))
+  cat("\n\n")
+  
+  # anova per il confronto del modello 2 con il modello 1
+  cat("===== ANOVA del modello 3 vs modello 2 =====\n\n")
+  print(anova(mod2, mod3))
+  cat("\n\n")
+}
+
+stampa_mod3()
+
+```
+
+**Interpretazione dei risultati - modello 3**
+
+Il modello 3 ottenuto con la rimozione della variabile Numero di gravidanze mostra R² e R² aggiustato di circa 0.73, quindi spiega circa il 73% della variabilità del Peso, praticamente identico al modello 2. 
+
+Anche il Residual standard error (RSE), di circa 275 g, è invariato rispetto al modello completo. 
+
+Questo indica che la rimozione di Numero di gravidanze non peggiora la capacità esplicativa né predittiva del modello.
+
+Per il principio di parsimonia: a parità di bontà di adattamento (R², R² aggiustato e RSE), è da preferire il modello con meno regressori, quindi il modello 3.
+
+**Interpretazione dei risultati - coefficienti**
+
+Il modello 3 mantiene le variabili: Durata della gestazione, Lunghezza alla nascita, Circonferenza cranica e Sesso del neonato (tutti con p-value <<  α) hanno un effetto statisticamente e clinicamente significativo.
+
+**Interpretazione dei risultati - ANOVA**
+
+L’ANOVA confronta il modello 3 con il modello 2. Il p-value = 0.004 < α, indica che il modello 3 spiega significativamente meno varianza del modello 2.
+
+Tuttavia, il modello 2 -come già osservato- presenta R², R² e Residual standard error (RSE) praticamente identici al modello 2. 
+
+Questo significa che, anche se esiste una differenza statistica, non è clinicamente rilevante. La semplificazione è accettabile dal punto di vista pratico e predittivo, e conferma che il modello 3 mantiene la maggior parte dell’informazione del modello 2. Per il principio di parsimonia viene scelto il modello 3.
+
+-------------------------------------------------------------
+
+**Confronto tra AIC e BIC dei tre modelli:**
+
+
+```{r, results = "asis"}
+# modelli da comparare
+mod1 <- lm(Peso ~ Anni.madre + N.gravidanze + Fumatrici + Gestazione + Lunghezza + Cranio + Tipo.parto + Ospedale + Sesso, data = dati)
+
+mod2 <- lm(Peso ~ N.gravidanze + Gestazione + Lunghezza + Cranio + Sesso, data = dati)
+
+mod3 <- lm(Peso ~ Gestazione + Lunghezza + Cranio + Sesso, data = dati)
+
+# Stampa intabellata di BIC e AIC
+stampa_BIC_AIC <- function() {
+  print(kable(BIC(mod1, mod2, mod3)))
+  cat("\n\n")
+  print(kable(AIC(mod1, mod2, mod3)))
+  cat("\n\n")
+}
+
+stampa_BIC_AIC()
+```
+
+**Intrepretazione dei risultati - Confronto tra AIC e BIC dei tre modelli**
+
+Il BIC minimo è quello del modello 2.
+Tuttavia, la differenza tra modello 2 e modello 3 è di soli 0.44 punti: una differenza di BIC < 2 è un valore trascurabile.
+Quindi modello 2 e modello 3 sono sostanzialmente equivalenti secondo il BIC. Il BIC non penalizza la rimozione di Numero di gravidanze.
+
+L’AIC minimo è quello del modello completo (modello 1). Le differenze sono:
+
+- diffrenza AIC tra modello 2 e modello 1 circa 7.24 (evidenza moderata-forte)
+
+- diffrenza AIC tra modello 3 e modello 1 circa 13.51 (evidenza forte)
+
+Secondo l’AIC il modello 1 è chiaramente preferito e il modello 3 è fortemente penalizzato
+
+La differenza di modello preferito tra BIC e AIC è dovuta al fatto che:
+
+- AIC privilegia la capacità predittiva, ed è più permissivo: tende a mantenere più regressori.
+
+- BIC privilegia la parsimonia e la consistenza: penalizza fortemente modelli complessi, soprattutto con n grande.
+
+**In questo studio si sceglie di usare il BIC come criterio di scelta**, al fine di ottenere un modello parsimonioso e interpretabile. Caratteristiche dello studio che favoriscono l'uso di BIC:
+
+- Obiettivo interpretativo (non solo predittivo): lo studio ha lo scopo di spiegare quali fattori influenzano il Peso neonatale.
+
+- Numerosità campionaria elevata (n = 2500): in questo caso l’AIC tende a selezionare modelli troppo complessi, mentre il BIC penalizza in modo più severo l’inclusione di regressori con contributo informativo marginale.
+
+- Presenza di una variabile statisticamente significativa ma con effetto clinicamente trascurabile (Numero di gravidanze): il BIC è più adatto a eliminare questo tipo di variabili.
+
+- Modelli quasi equivalenti in termini di R², R² e Residual Standard Error (RSE): indicano che la semplificazione non peggiora la bontà di adattamento.
+
+
+
+-------------------------
+
+#### **C. Multicollinearità tra regressori**
+
+Per le variabili che sono risultate significative e che sono state incluse nel modello 3 si deve verificare che non siano fortemente correlate tra loro, poichè questo potrebbe rendere instabili le stime dei coefficienti e gonfiare gli errori standard.
+
+Vengono calcolati: le correlazioni tra le variabili quantitative a due a due (matrice di correlazione) e i VIF (= Variance Inflation Factor).
+
+```{r, comment = NA}
+# Stampa leggibile dei risultati
+stampa_corr_vif_mod3 <- function() {
+  
+  # correlazione tra regressori QUANTITATIVI del modello 3
+  cat("===== Correlazioni tra regressori del modello 3 =====\n\n")
+  print(round(cor(dati[, c("Gestazione", "Lunghezza", "Cranio")]), 2))
+  cat("\n\n")
+  
+  # VIF dei regressori del modello 3
+  cat("===== VIF dei regressori del modello 3 =====\n\n")
+  print(car::vif(mod3))
+  cat("\n\n")
+}
+
+stampa_corr_vif_mod3()
+```
+
+**Interpretazione dei risultati**
+
+La matrice di correlazione tra i regressori quantitativi del modello 3 mostra coefficienti di circa 0.46, 0.60 e 0.62, che indicano correlazioni moderate, al di sotto delle soglie critiche comunemente utilizzate per segnalare multicollinearità severa (r ≥ 0.7–0.8). 
+Pertanto, dalla sola analisi delle correlazioni non emerge un rischio rilevante di multicollinearità.
+
+I VIF stimati per i regressori del modello 3 sono tutti inferiori a 5, soglia oltre la quale si potrebbe presentare multicollinearità problematica; e molto inferiori a 10, soglia della multicollinearità severa.
+
+Coefficienti di correlazione e VIF indicano che non ci sono problemi di multicollinearità nel modello 3.
+
+-----------------------------------------------------------
+
+#### **D. Controllo di possibili effetti non lineari.**
+
+Gli effetti non lineari sono stati indagati con scatterplot tra ogni regressore QUANTITATIVO e la variabile risposta (Peso) per osservare se la relazione è approssimativamente lineare, o se ci sono curvature, valori soglia o saturazioni.
+
+```{r, results = "asis"}
+
+# Scatterplot per Peso vs regressori quantitativi
+
+scatterplot_peso_vs_x <- function(x, xlab) {
+  
+  variabili <- c("Gestazione", "Lunghezza", "Cranio")
+  nomi <- c("Settimane di gestazione",
+             "Lunghezza alla nascita (mm)",
+             "Circonferenza cranica (mm)")
+  
+  for (i in 1:length(variabili)) {
+    x <- variabili[i]
+    xlab <- nomi[i]
+    
+    # scatterplot
+    plot(dati[[x]],
+         dati$Peso / 1e3,
+         pch = 20,
+         xlab = xlab,
+         ylab = "Peso neonatale (kg)",
+         main = paste("Scatterplot: Peso neonatale (Kg) vs", xlab))
+    
+    # retta di regressione 
+    abline(lm(dati$Peso / 1e3 ~ dati[[x]]),
+           col = "red",
+           lwd = 2)
+    
+    # curva LOWESS (LOcally WEighted Scatterplot Smoothing), utile per evidenziare eventuali non linearità.
+    lines(lowess(dati[[x]], dati$Peso / 1e3),
+          col = "blue",
+          lwd = 2)
+  }
+}
+
+
+# Stampa leggibile
+scatterplot_peso_vs_x()
+
+```
+
+**Interpretazione dei risultati - variabili QUANTITATIVE**
+
+Negli scatterplot si osservano due linee:
+
+- curva LOWESS (= LOcally WEighted Scatterplot Smoothing), in blu, che è una stima non parametrica della relazione tra due variabili. La LOWESS viene costruita con una tecnica di smoothing locale, cioè calcola valori medi ponderati usando punti vicini. La LOWESS è utile per evidenziare eventuali non linearità.
+
+- linea di regressione, in rosso, creata ipotizzando che il rapporto tra il predittore e il peso sia lineare.
+
+Se la curva LOWESS tende a coincidere con la retta di regressione, significa che i dati non mostrano deviazioni evidenti dalla linearità.
+
+NOTA. I punti dello scatterplot di Peso vs Gestazione sono disposti in colonne verticali perchè la gestazione è una variabile discreta.
+
+Dagli scatterplot tra Peso neonatale e ognuna delle variabili quantitative (settimane di gestazione, lunghezza neonatale e circonferenza cranica) si osserva che le relazioni sono chiaramente crescenti e l’andamento appare approssimativamente lineare, senza evidenti curvature. La curva LOWESS segue piuttosto bene la linea di regressione per tutti i regressori (in particolare per Lunghezza neonatale).
+
+La dispersione del Peso è molto bassa per Lunghezza neonatale e per valori centrali di Settimane di gestazione e Circonferenza cranica. Per valori estremi di Settimane di gestazione e Circonferenza cranica la dispersione aumenta leggermente, ma senza pattern anomali evidenti. 
+
+Il grafico supporta l’ipotesi di una relazione lineare Peso neonatale e i regressori quantitativi.
+
+---------------------------------------------------
+
+#### **E. Controllo delle interazioni tra regressori**
+
+I modelli 4, 5, 6 e 7 derivano dal modello 3 tramite l’aggiunta di singole interazioni tra le variabili. L’obiettivo è verificare se l’effetto combinato di due regressori migliora la capacità interpretativa del modello.
+
+```{r, comment = NA}
+# Interazioni tra i regressori quantitativi e Sesso
+mod4 <- lm(Peso ~ (Gestazione + Lunghezza + Cranio) * Sesso, data = dati)
+
+stampa_summary_mod4 <- function() {
+  cat("===== Summary del modello 4 =====\n\n")
+  print(summary(mod4))
+  cat("\n\n")
+}
+
+stampa_summary_mod4()
+```
+
+**Interpretazione dei risultati**
+
+Non ci sono interazioni significative tra i regressori quantitativi e Sesso: Gestazione e Sesso (p-value ≈ 0.97 > α), Lunghezza e Sesso (p-value circa 0.13 > α), Cranio e Sesso (p-value ≈ 0.86 > α). Quindi si preferisce il modello 3.
+
+```{r, comment = NA}
+
+# Interazione tra i regressori quantitativi
+mod5 <- update(mod3, . ~ . + Gestazione:Lunghezza)
+mod6 <- update(mod3, . ~ . + Gestazione:Cranio)
+mod7 <- update(mod3, . ~ . + Lunghezza:Cranio)
+
+mod567 <- list("modello 5" = mod5, "modello 6" = mod6, "modello 7" = mod7)
+
+# Stampa leggibile
+stampa_summary_mod567 <- function() {
+  
+  for (m in names(mod567)) {
+    cat("===== Summary del ", m, "=====\n\n")
+    print(summary(mod567[[m]]))
+    
+    # RMSE
+    pred <- predict(mod567[[m]])
+    res <- dati$Peso - pred
+    cat("RMSE:", round(sqrt(mean(res^2)),2), "g\n\n")
+  }
+  
+  # RMSE del modello 3
+  cat("===== Modello 3 =====\n\n")
+  pred_mod3 <- predict(mod3)
+  res_mod3 <- dati$Peso - pred_mod3
+  cat("RMSE:", round(sqrt(mean(res_mod3^2)),2), "g\n\n")
+}
+
+stampa_summary_mod567()
+
+```
+
+**Interpretazione dei risultati**
+
+Nei modelli 5, 6 e 7 si analizzano singolarmente le interazioni: Gestazione:Lunghezza, Gestazione:Cranio e Lunghezza:Cranio, tutte con p-value << α, quindi tutte statisticamente significative.
+
+R² e R² aggiustato migliorano leggermente in tutti i modelli rispetto al modello 3, in particolare nel modello 6 (con l'interazione Gestazione:Cranio).
+
+Residual Standard Error (RSE) e Root Mean Squared Error (RMSE) misurano quanto, in media, i valori osservati si discostano dai valori predetti dal modello. Sia RSE (Residual standard error) che RMSE (Root Mean Squared Error) sono più bassi in tutti i modelli rispetto al modello 3, in particolare nel modello 6.
+
+In conclusione **il modello migliore è il modello 6 (con l'interazione Gestazione:Cranio)**.
+
+Per conferma che il modello 6 sia il migliore, si prova a costruire un modello che comprende tutte le interazioni significative.
+
+```{r, comment = NA}
+
+# Modello con tutte le interazioni significative
+mod8 <- update(mod3, . ~ . + Gestazione:Lunghezza + Gestazione:Cranio + Lunghezza:Cranio)
+
+stampa_summary_mod8 <- function() {
+  cat("===== Summary del modello 8 =====\n\n")
+  print(summary(mod8))
+  cat("\n\n")
+  
+  pred_mod8 <- predict(mod8)
+  res_mod8 <- dati$Peso - pred_mod8
+  cat("RMSE:", round(sqrt(mean(res_mod8^2)),2), "g\n\n")
+}
+
+stampa_summary_mod8()
+```
+
+**Interpretazione dei risultati**
+
+Il modello 8 che contiene tutte le interazioni mostra che: 
+
+- intreazione Gestazione:Cranio rimane significativa (p-value << α)
+
+- mentre le interazioni Gestazione:Lunghezza (p-value cira 0.58 > α) e Lunghezza:Cranio (p-value cira 0.52 > α) diventano statisticamente NON significative.
+
+R² del modello 8 è identico al modello 6; mentre R² aggiustato, Residual standard error (RSE) e Root Mean Squared Error (RMSE) sono praticamente identici.
+
+In conclusione, aggiungere tutte le interazioni (modello 8) non migliora significativamente il modello 6, ma lo rende più complesso e meno interpretabile. Quindi **il modello migliore rimane il modello 6 (con l'interazione Gestazione:Cranio)**.
+
+-----------------------------------------------------------
+
+## 2.4. Analisi della Qualità del Modello
+
+Una volta ottenuto il modello finale (modello 6), si valuta la sua capacità predittiva utilizzando metriche come R² e il Root Mean Squared Error (RMSE). Un'attenzione particolare viene rivolta all'analisi dei residui e alla presenza di valori influenti, che potrebbero distorcere le previsioni.
+
+#### **A. Analisi di R² il Root Mean Squared Error (RMSE)**
+
+```{r, comment = NA}
+
+# Il modello finale è il modello 6:
+# mod6 <- (Peso ~ Gestazione + Lunghezza + Cranio + Sesso + Gestazione:Cranio, data = dati)
+
+stampa_summary_rmse_mod6 <- function() {
+  
+  # R², R² aggiustato e RSE
+  cat("===== Summary del modello 6 =====\n\n")
+  print(summary(mod6))
+  cat("\n\n")
+  
+  # RMSE
+  cat("===== RMSE del modello 6 =====\n\n")
+  pred <- predict(mod6) # valori predetti
+  res <- dati$Peso - pred # residui
+  print(sqrt(mean(res^2)))
+  cat("\n\n")
+  
+  # NOTA. Il codice è stato modificato a posteriori 
+  # per correggere l'eteroschedasticità usando errori standard robusti
+  cat("===== Coefficienti con errori standard robusti =====\n\n")
+  robust_mod6 <- coeftest(mod6, vcov = vcovHC(mod6, type = "HC3"))
+  print(robust_mod6)
+  cat("\n\n")
+}
+
+stampa_summary_rmse_mod6()
+```
+
+**Interpretazione dei risultati: R² e RMSE**
+
+Come già commentato, R² = 0.7298 indica che il modello 6 spiega circa il 73% della variabilità del peso neonatale.
+R² aggiustato = 0.7292, molto vicino a R², indica che il modello rispetta il principio di parsimonia e non contiene parametri inutili: l’interazione Gestazione:Cranio aggiunge informazione.
+
+Residual Standard Error (RSE) e Root Mean Squared Error (RMSE) misurano quanto, in media, i valori osservati si discostano dai valori predetti dal modello. La differenza è che RSE dipende dal numero di parametri stimati, mentre RMSE no. Nel modello 6 RSE e RMSE sono praticamente uguali perchè il modello ha molte osservazioni e pochi parametri.
+Con un RSE di 273.2 g e un RMSE di circa 272.88 g, nel modello 6 in media le previsioni si discostano dal valore reale di circa 273 grammi.
+
+Considerando che il peso medio di un neonato è di circa 3000–3500 g, l'errore relativo è di circa 8–9%: un valore buono per dati biologici.
+
+**NOTA. Il codice è stato modificato a posteriori per correggere l'eteroschedasticità usando errori standard robusti.**
+Con l'uso di errori standard robusti (rispetto al metodo OLS (Ordinary Least Squares)), le stime dei coefficienti non cambiano, ma cambiano la loro precisione e significatività statistica (valori t e p-value). Usando errori standard robusti:
+
+- Gli errori standard aumentano per quasi tutte le variabili (Gestazione, Lunghezza, Cranio, e interazione Gestazione:Cranio). Questo indica che per alcune variabili l’OLS sottostima la variabilità dei coefficienti, a causa dell'eteroschedasticità.
+
+- All'aumento dell'errore standard corrispondono: una diminuzione del t-value e un aumento del p-value. 
+
+Tutte le variabili rimangono statisticamente significative al 5%, quindi le conclusioni sostanziali del modello 6 non cambiano.
+
+----------------------------------------
+
+#### **B. Diagnostica sui residui e presenza di valori influenti** 
+
+La diagnostica sui residui permette di controllare che le assunzioni del modello non siano violate:
+
+- **Linearità del modello**: si verifica con il grafico Residuals vs Fitted.
+
+L'assunzione di linearità presuppone che la relazione tra i regressori (Xi) e la variabile risposta (Y) sia descrivibile tramite una linea retta. 
+Se l’assunzione di linearità non fosse soddisfatta: i coefficienti di regressione sarebbero distorti e il modello non sarebbe valido per inferenza e interpretazione.
+
+- **Normalità dei residui**: si verifica con il grafico Q–Q plot dei residui e con il test di Shapiro–Wilk.
+
+L'assunzione di normalità dei residui richiede che gli errori del modello seguano una distribuzione normale con media zero. 
+Se la normalità non fosse rispettata, l'inferenza non sarebbe affidabile, poichè non sarebbero affidabili il p-value e gli intervalli di confidenza, e non sarebbero validabili i test d'ipotesi (t-test, F-test). 
+Tuttavia, se il campione è sufficientemente grande, per il teorema del limite centrale, la distribuzione della statistica t e F tende a una distribuzione normale standard, quindi non è indispensabile che la normalità dei residui sia rispettata.
+
+- **Omoschedasticità dei residui**: si verifica con il grafico Scale–Location plot e con il test di Breusch-Pagan.
+
+Omoschedasticità significa varianza (dispersione) costante dei residui per tutti i valori del regressore X, o per tutti i valori predetti (come nel grafico Scale–Location). Significa che gli errori del modello devono avere uguale dispersione in tutte le osservazioni della retta di regressione: non devono esserci zone in cui l'errore è maggiore o minore di altre.
+Se l'omoschedasticità non fosse rispettata, le stime dei coefficienti di regressione resterebbero corrette e il modello resterebbe valido, ma l'inferenza diventerebbe meno affidabile, poichè non sarebbero affidabili il p-value e gli intervalli di confidenza, e non sarebbero validabili t-test, F-test.
+
+- **Indipendenza dei residui (assenza di autocorrelazione)**: si verifica con il test di Durbin–Watson.
+
+L'assunzione di indipendenza dei residui assume che i residui di un’osservazione non dipendono da quelli di un’altra.
+Se l'assunzione non fosse rispettata, l'inferenza non sarebbe affidabile, poichè non sarebbero affidabili il p-value e gli intervalli di confidenza, e non sarebbero validabili t-test, F-test.
+
+Inoltre si verifica l'**assenza di valori influenti**: con il grafico Residuals vs Leverage.
+
+#### B.1. Grafici per verificare le assunzioni del modello di regressione
+
+```{r, results = "asis"}
+
+# Metodo grafico
+par(mfrow = c(2,2)) # divido la finestra grafica in 4
+plot(mod6)
+```
+
+**Interpretazione dei risultati**
+
+**Residuals vs Fitted - mostra se il modello è lineare**
+
+Il grafico in alto a sinistra mette in relazione le stime ottenute col modello (Fitted values) e i rispettivi residui (Residuals).
+In un buon modello i punti devono disporsi casualmente attorno alla linea orizzontale che rappresenta media zero, senza che si formino pattern particolari.
+
+Per il modello 6, il grafico mostra un andamento approssimaativamente orizzontale attorno allo zero, senza andamenti curvilinei marcati, tipico di un modello lineare.
+
+**Q-Q Residuals - mostra se i residui hanno distribuzione normale**
+
+Il grafico in alto a destra mette in relazione i quantili di una distribuzione normale (Theoretical Quantiles) e i residui standardizzati (Standardized residuals).
+Se i punti giacciono approssimativamente sulla bisettrice del grafico, allora i residui seguono una distribuzione normale.
+
+Per il modello 6, il grafico mostra che i residui seguono bene la bisettrice nella parte centrale, ma con delle deviazioni nelle code, in particolare a destra. Questo significa che i residui seguono una distribuzione approssimativamente normale nella parte centrale, mentre agli estremi la normalità non è rispettata a causa della presenza di code più pesanti della normale.
+Tuttavia, con una numerosità campionaria elevata, questa deviazione non compromette l’inferenza.
+
+**Scale-Location - mostra se i residui hanno varianza costante (omoschedasticità)**
+
+Il grafico in basso a sinistra mette in relazione le stime ottenute col modello (Fitted values) e la radice quadrata dei residui standardizzati.
+Se i punti formano una nuvola casuale e grossomodo orizzontale attorno a un valore di Y, senza mostrare pattern particolari, allora i residui hanno varianza costante.
+
+Per il modello 6, il grafico mostra un andamento leggermente crescente, con una dispersione dei residui che aumenta moderatamente con fitted values alti. Valuteremo questo aspetto, successivamente con i test sui residui.
+
+**Residuals vs Leverage - mostra se sono presenti osservazioni influenti**
+
+Il grafico in basso a destra mette in relazione i valori leverage e i residui standardizzati (Standardized residuals).
+
+Nel grafico le due linee tratteggiate rappresentano le linee della distanza di Cook: una con soglia di 0.5, che è quella di avvertimento, e una con soglia 1, che è quella di allarme.
+Osservazioni con una Distanza di Cook che supera le linee tratteggiate sono considerati valori potenzialmente influenti.
+I valori influenti, con leverage elevato e residui grandi, possono influenzare in modo eccessivo le stime del modello.
+
+Per il modello 6, il grafico non mostra osservazioni che superano chiaramente le linee di Cook’s distance, quindi non sono presenti osservazioni fortemente influenti.
+Si nota l'osservazione 1551 che ha un residuo standardizzato molto alto e un
+leverage moderato, tuttavia rimane sotto la linea di Cook con soglia 1. Quindi 1551 è un outlier (residuo alto), ma non è abbastanza influente da alterare in modo sostanziale le stime del modello.
+
+L'analisi dei possibili valori influenti verrà conclusa al punto B.4.
+
+--------------------------------------------------------------
+
+#### B.2. Test sui residui
+
+I test sui residui, per verificare le assunzioni del modello di regressione, sono i seguenti:
+
+- **Test di Shapiro–Wilk**: per verificare la normalità dei residui.
+Il sistema di ipotesi è il seguente:
+
+- H₀: i dati provengono da una distribuzione normale
+
+- H₁: i dati NON provengono da una distribuzione normale
+
+Si valutano il p-vale rispetto ad α, e la statistica W che più si vvicina a 1 e più i dati si avvicinano alla normalità.
+
+- **Test di Breusch-Pagan**: per verificare l'omoschedasticità dei residui.
+Il sistema di ipotesi è il seguente:
+
+- H₀: i residui presentano omoschedasticità, cioè varianza costante
+
+- H₁: i residui presentano eteroschedasticità
+
+Si valuta il p-vale rispetto ad α.
+
+- **Test di Durbin-Watson**: per l'indipendenza dei residui (assenza di autocorrelazione).
+
+Il sistema di ipotesi è il seguente:
+
+- H₀: i residui NON sono correlati, NON c’è autocorrelazione
+
+- H₁: i residui sono correlati, c’è autocorrelazione
+
+Si valutano il p-vale rispetto ad α, e la statistica DW che indica: assenza di autocorrelazione per valori vicini a 2, autocorrelazione positiva per valori < 2 e autocorrelazione negativa per valori > 2.
+
+
+```{r, results = "asis"}
+# Stampa leggibile dei test di Shapiro-Wilk, Breusch-Pagan e Durbin-Watson
+stampa_test_mod6 <- function() {
+    residui <- residuals(mod6)
+  
+  # Test di Shapiro-Wilk
+  sw <- shapiro.test(residui)
+  cat("#### ===== Test di Shapiro–Wilk + Density plot, modello 6 =====\n\n")
+  cat("Livello di significatività α = 0.05\n\n")
+  cat("```text\n")
+  cat(paste(capture.output(sw), collapse = "\n"))
+  cat("\n```\n\n")
+  
+  # Density plot
+  mu_res <- mean(residui, na.rm = TRUE) / 1e3 # in Kg
+  sigma_res <- sd(residui, na.rm = TRUE) / 1e3 # in Kg
+  
+  p_res <- ggplot(data.frame(Residui = residui), aes(x = Residui / 1e3)) + # in Kg
+    geom_density(fill = "#87CEFA", alpha = 0.6, linewidth = 1) +
+    stat_function(fun = dnorm,
+                  args = list(mean = mu_res, sd = sigma_res),
+                  linewidth = 1,
+                  colour = "red") +
+    labs(title = "Density plot dei residui + curva normale teorica",
+         x = "Residui",
+         y = "Densità") +
+    theme_minimal()
+  
+  print(p_res)
+  cat("\n\n")
+  
+  # Test di Breusch-Pagan
+  bp <- bptest(mod6)
+  cat("#### ===== Test di Breusch-Pagan, modello 6 =====\n\n")
+  cat("Livello di significatività α = 0.05\n\n")
+  cat("```text\n")
+  cat(paste(capture.output(bp), collapse = "\n"))
+  cat("\n```\n\n")
+  
+  # Test di Durbin-Watson
+  dw <- dwtest(mod6)
+  cat("#### ===== Test di Durbin-Watson, modello 6 =====\n\n")
+  cat("Livello di significatività α = 0.05\n\n")
+  cat("```text\n")
+  cat(paste(capture.output(dw), collapse = "\n"))
+  cat("\n```\n\n")
+}
+
+stampa_test_mod6()
+
+```
+
+**Interpretazione dei risultati**
+
+**Test di Shapiro–Wilk** per verificare la normalità dei residui mostra un p-value < 2.2e-16 << α, quindi il risultato è statisticamente significativo e indica di rifiutare l'ipotesi nulla di normalità. Tuttavia la statistica W di circa 0.97 è vicina a 1, indicando una distribuzione vicina alla normale.
+Questa apparente contraddizione è dovuta al fatto che, quando la numerosità campionaria è grande (n = 2500), anche deviazioni minime dalla normalità portano a p-value ≪ α. 
+Nel density plot che mette a confronto la distribuzione dei residui con la distribuzione nomale (linea rossa), le due distribuzioni appaiono sostanzialmente sovrapponibili.
+
+In conclusione, il test di Shapiro–Wilk rifiuta formalmente l’ipotesi di normalità dei residui, tuttavia il p-value è influenzato dall'elevato numero di osservazioni. Il valore di W prossimo a 1, l’analisi del Q–Q plot e il density plot suggeriscono che le deviazioni dalla normalità siano lievi e concentrate nelle code.
+Quindi l'assunzione della normalità dei residui è adeguatamente soddisfatta ai fini dell’inferenza.
+
+**Test di Breusch-Pagan** per verificare l'omoschedasticità dei residui mostra p-value < 2.2e-16 << α, quindi il risultato è statisticamente significativo e indica di rifiutare l'ipotesi nulla di omoschedasticità.
+In presenza di eteroschedasticità, l'inferenza diventa meno affidabile poichè sono meno affidabili: errori standard, p-value, intervalli di confidenza
+
+Di conseguenza, è opportuno adottare errori standard robusti. Verrà fatto nello step successivo B.3.
+
+**Test di Durbin-Watson** per verificare l'indipendenza dei residui (assenza di autocorrelazione) mostra un p-value di circa 0.16 > α, quindi il risultato NON è statisticamente significativo e indica di NON rifiutare l'ipotesi nulla di assenza di autocorrelazione. In modo concorde, la statistica DW di circa 1.96, vicina a 2, indica assenza di autocorrelazione.
+
+-------------------------------------------------
+
+#### B.3. Correzione dell'eteroschedasticità
+
+Nel modello 6 (stimato con la tecnica base OLS = Ordinary Least Squares), attraverso il test di Breusch–Pagan, è emersa violazione dell’assunzione di omoschedasticità dei residui. **L’eteroschedasticità non invalida il modello, ma invalida l’inferenza OLS standard**.
+
+Per correggere le distorsioni causate da varianze diverse, si usano gli **errori standard robusti** (robust standard errors).
+Gli errori standard robusti sono correzioni statistiche utilizzate nell'analisi di regressione per ottenere stime affidabili dell'incertezza quando le assunzioni classiche sono violate, in particolare in presenza di eteroschedasticità. 
+Servono a rendere validi test d'ipotesi e intervalli di confidenza. 
+
+Gli errori standard robusti non modificano i coefficienti di regressione stimati, quindi non modificano il modello, ma correggono il modo in cui viene calcolata la loro precisione (cioè l'errore standard). 
+
+Gli errori standard robusti funzionano bene con campioni grandi (come in questo studio: n = 2500).
+
+
+```{r, comment = NA}
+# Calcolare errori standard robusti
+stampa_errori_robusti <- function() {
+  errori_robusti <- coeftest(mod6, vcov = vcovHC(mod6, type = "HC1"))
+  # NOTA. viene usata la versione HC1 (standard) perchè più datto a campioni grandi.
+  # La versione HC3 invece è più usato per campioni medio-piccoli.
+  
+  cat("===== Modello 6 con Errori standard robusti =====\n\n")
+  print(errori_robusti)
+  cat("\n\n")
+  
+  # confronto con gli errori standard del metodo OLS
+  cat("===== Modello 6 con Errori standard originali =====\n\n")
+  print(summary(mod6))
+  cat("\n\n")
+}
+
+stampa_errori_robusti()
+```
+
+**Interpretazione dei risultati**
+
+Come atteso, l'uso di errori standard robusti non modifica le stime dei coefficienti, che restano sono identiche a quelle del modello OLS (Ordinary Least Squares); ma modifica la precisione e significatività statistica (valori t e p-value) correggendo la varianza in presenza di eteroschedasticità.
+
+Gli errori standard robusti risultano maggiori rispetto agli OLS per i regressori Lunghezza, Gestazione, Cranio, e per l’interazione Gestazione:Cranio. Questa osservazione è coerente con la presenza di eteroschedasticità che porta OLS a sottostimare la varianza dei coefficienti.
+
+Per tutti i regressori, i valori della statistica t diminuiscono passando dal metodo OLS al metodo robusto. I p-value invece aumentano, ma rimangono comunque < 0.05 per tutti i coefficienti, indicando che le relazioni tra le variabili rimangono statisticamente significative nonostante l'eteroschedasticità. 
+
+In conclusione, l’eteroschedasticità è presente nel modello 6, come evidenziato dal test di Breusch–Pagan. Tuttavia, l’utilizzo di errori standard robusti corregge l’inferenza statistica, rendendo affidabili i test sui coefficienti.
+Dopo la correzione, tutti i coefficienti rimangono statisticamente significativi, indicando che le conclusioni sostanziali del modello non sono influenzate dall’eteroschedasticità.
+
+----------------------------------------------------------
+
+#### B.4. Analisi di leverages, outliers e valori influenti
+
+Alcune osservazioni di un modello possono essere:
+
+- **Outlier**: sono osservazioni che hanno un **valore anomalo della variabile risposta Y** (cioè molto diverso da quello previsto dal modello). Nel grafico sono punti anomali verticalmente, che stanno più in alto o più in basso di dove ci si aspetta.
+Un outlier ha un residuo elevato.
+
+- **Leverage**: sono osservazioni che hanno un **valore anomalo dei regressori Xi** (cioè molto diverso da quello previsto dal modello), che dipendono solo da X e non da Y. Nel grafico sono punti anomali orizzontalmente, che stanno più in a sinistra o più a destra di dove ci si aspetta.
+Un leverage ha una distanza nello spazio dei regressori elevata.
+
+Una osservazione può essere:
+
+- Outlier, ma non leverage: anomalo nella direzione Y (residuo elevato) ma con X normale. Queste osservazioni disturbano poco il modello.
+
+- Leverage, ma non outlier (con residuo piccolo): anomalo nella direzione X ma con Y normale. Queste osservazioni disturbano poco il modello.
+
+- **Valori influenti** (influential point): Outlier + Leverage, cioè anomalo sia nella direzione Y (residuo elevato) che nella direzione di X. Queste osservazioni alterano drasticamente i risultati, poichè **influiscono sul valore dei coefficienti**.
+
+La **distanza di Cook** dipende sia da leverage che da entità del residuo, e misura quanto una osservazione influenza i coefficienti, quindi quanto è un influential point.
+
+L'analisi dei valori influenti nel modello di regressione mira a identificare osservazioni che alterano significativamente i coefficienti, compromettendo la validità del modello.
+
+```{r, results = "asis"}
+
+stampa_lev_out <- function() {
+  
+  # 1. Individua i leverages
+  
+  lev <- hatvalues(mod6) # calcola i leverages
+  p <- length(coef(mod6)) # numero di parametri stimati (inclusa intercetta)
+  n <- length(lev)
+  soglia_lev <- 2 * p / n # definisce il valore soglia oltre il quale i valori sono leverages
+  
+  plot(lev,
+       pch = 20,
+       main = "Leverage values - modello 6",
+       xlab = "Indice osservazione",
+       ylab = "Leverage") # grafico dei leverages
+  abline(h=soglia_lev, col="red") # aggiunge la linea di soglia al grafico
+  
+  cat("\n\n")
+  
+  n_lev <- sum(lev>soglia_lev)
+   cat("Numero di osservazioni con leverage elevato:", n_lev, "\n\n")
+  
+  
+  # 2. Individua gli outliers
+   
+  rstud <- rstudent(mod6) # Per l’individuazione degli outlier si usano residui studentizzati esterni
+  soglia_out <- 3 # si usa solitamente (-3, +3) oppure(-2, +2)
+  
+  plot(rstud,
+       pch = 20,
+       main = "Outlier values - modello 6",
+       ylab = "Residui studentizzati",
+       xlab = "Indice osservazione")
+  
+  abline(h = c(-soglia_out, soglia_out),
+       col = "red")
+  
+  cat("\n\n")
+  
+  n_out <- sum(abs(rstud) > soglia_out)
+  cat("Numero di outlier:", n_out, "\n\n")
+  
+  
+  # 3. Identifica al contempo leverages e outliers calcolando la Distanza di Cook
+
+  cook <- cooks.distance(mod6) # distanza di Cook
+  soglia_cook <- 4 / n # con un dataset grande come soglia si usa 4/n
+  
+  plot(cook, 
+       pch = 20,
+       main = "Valori influenti - modello 6",
+       ylab = "Cook's distance",
+       xlab = "Indice osservazione")
+  
+  abline(h = soglia_cook,
+         col = "red")
+  
+  cat("\n\n")
+  
+  n_inf <- sum(cook > soglia_cook) # numero di osservazioni influenti
+  cat("Numero di osservazioni influenti:", n_inf, "\n\n")
+  
+  
+  # 4. Riporta il grafico Residuals vs Leverage (con curve di Cook)
+  
+  plot(mod6,
+       which = 5, # mostra il grafico Residuals vs Leverage (con curve di Cook)
+       pch=20,
+       main = "Residuals vs Leverage (con curve di Cook) - modello 6")
+      
+  cat("\n\n")
+}
+
+stampa_lev_out()
+```
+
+**Interpratzione dei risultati**
+
+Come soglia indicativa per identificare **osservazioni con leverage elevato** è stata utilizzata la formula 2p/n, dove p è il numero di parametri stimati (inclusa l’intercetta) e n è la numerosità campionaria.
+Applicando tale criterio, risultano 117 osservazioni con leverage superiore alla soglia. Tuttavia, data l’elevata numerosità del campione (n = 2500), la soglia assume un valore molto basso; di conseguenza, anche osservazioni con leverage solo moderatamente superiore alla media vengono classificate come “leverage elevato”.
+
+Gli **outlier** sono stati individuati adottando come soglia convenzionale il valore assoluto pari a 3. Con tale criterio risultano 22 osservazioni classificate come outlier.
+Considerata la dimensione del campione, la presenza di una quota limitata di outlier è attesa e coerente con le leggere deviazioni nelle code della distribuzione dei residui osservate nel Q–Q plot.
+
+Per individuare le **osservazioni potenzialmente influenti** è stata calcolata la Distanza di Cook con il criterio conservativo 4/n, che con un campione numeroso porta a identificare un numero relativamente elevato di osservazioni potenzialmente influenti (108 osservazioni nel presente caso).
+Tuttavia, questo criterio ha una funzione di screening e non di diagnosi definitiva. L’interpretazione sostanziale è stata effettuata tramite il grafico Residuals vs Leverage con le curve di Cook.
+
+Nel **grafico Residuals vs Leverage** visto anche al punto B.1. sono messi in relazione i valori leverage e i residui standardizzati.
+Le due linee tratteggiate rappresentano le linee della distanza di Cook: una con soglia di 0.5 (soglia di avvertimento), e una con soglia 1 (soglia di allarme). Osservazioni con una Distanza di Cook che supera le soglie sono considerate osservazioni potenzialmente influenti sulla stima del modello.
+
+Nel modello 6, il grafico non ha mostrato la presenza di osservazioni fortemente influenti che superano la soglia critica di Cook peri a 1. 
+Solo pochissime osservazioni si avvicinano alla soglia di avvertimento pari a 0.5.
+È presente un singolo punto (osservazione 1551) caratterizzato da un residuo standardizzato elevato, ma con leverage moderato, configurandosi quindi come un outlier e non come osservazione influente.
+
+Nonostante l’individuazione di alcune osservazioni con leverage moderatamente elevato, di un numero limitato di outlier e di diverse osservazioni che superano soglie conservative basate sulla Distanza di Cook, l’analisi grafica e congiunta di leverage e residui mostra che tali osservazioni non alterano in modo sostanziale le stime dei coefficienti del modello. Non viene quindi compromessa l’affidabilità delle stime e delle inferenze.
+
+-------------------------------------------------------------
+
+# 3. Previsioni e Risultati
+Una volta validato il modello, lo useremo per fare previsioni pratiche. Ad esempio, potremo stimare il peso di una neonata considerando una madre alla terza gravidanza che partorirà alla 39esima settimana.
+
+## A. Validazione del modello
+
+### A.1. Diagnostica del modello
+
+La diagnostica del modello 6 conferma che le principali assunzioni della regressione lineare (linearità, omoschedasticità, normalità dei residui e assenza di osservazioni influenti) sono ragionevolmente soddisfatte:
+
+- Il grafico Residuals vs Fitted mostra che i residui sono distribuiti attorno a zero senza pattern curvilinei evidenti, indicando che la relazione tra regressori e variabile risposta è approssimativamente lineare.
+
+- Il Q–Q plot evidenzia che i residui seguono una distribuzione normale nella parte centrale, con leggere deviazioni nelle code, coerenti con la presenza di outlier attesi in un dataset biologico di grandi dimensioni. Tali deviazioni non compromettono l’inferenza statistica, grazie al numero elevato di osservazioni.
+
+- Il grafico Scale–Location suggerisce una leggera tendenza all’aumento della varianza dei residui per valori predetti più alti; questo fenomeno di eteroschedasticità è stato successivamente corretto mediante errori standard robusti.
+
+- Il grafico Residuals vs Leverage mostra l’assenza di osservazioni fortemente influenti.
+
+
+
+### A.2. Cross-validation k-fold
+
+La tecnica cross-validation k-fold permette di stimare la bontà predittiva del modello sul dataset iniziale, quindi permette di capire quanto il modello generalizza bene su dati nuovi.
+
+La tecnica cross-validation k-fold consiste nel testare più volte il modello su porzioni diverse di dati, riducendo il rischio che la valutazione sia influenzata da uno specifico modo di dividere i dati. Procedimento:
+
+- Il dataset viene suddiviso in k “fold” (partizioni) di dimensione circa uguale.
+
+- Per ogni iterazione i da 1 a k: il modello viene stimato usando il fold i (set di test), poi viene allenato sui restanti k-1 fold (set di training), e infine restituisce una misura della performance del modello.
+
+Alla fine delle iterazioni si ottengono k misure di performance che si possono aggregare (es: calcolare la media) per avere una stima più affidabile dell’efficacia del modello su dati nuovi.
+
+Per un dataset di 2500 osservazioni si può scegliere k=10. Questo significa che il ataset viene diviso in 10 sottoinsiemi, e per ogni ciclo 9/10 del dataset è usato per addestrare il modello e 1/10 per testarlo.
+
+```{r, comment = NA}
+
+stampa_cros_val <- function() {
+  # fissa il punto di partenza del generatore di numeri casuali,
+  # garantendo la riproducibilità dei risultati:
+  set.seed(123)
+  
+  # crea il controllo della cross-validation:
+  ctrl <- trainControl(method = "cv", # metodo cross-validation classico
+                       number = 10, # numero di fold
+                       savePredictions = "final") # salva le previsioni
+  
+  # allena il modello eseguendo 10 volte la regressione lineare sui fold e calcola RMSE:
+  mod6_cv <- train(formula(mod6), # formula del modello 6
+                   data = model.frame(mod6),  # stesso dataset con cui è stato allenato mod6
+                   method = "lm", # regressione lineare
+                   trControl = ctrl, # controllo della cross-validation
+                   metric = "RMSE") # metrica per valutare il modello
+  
+  cat("===== Cross-validation k-fold, modello 6 =====\n\n")
+  print(mod6_cv)
+  cat("\n\n")
+  
+  return(mod6_cv) # restituisce il modello addestrato con cross-validation
+}
+
+mod6_cv <- stampa_cros_val()
+```
+
+**Interpretazione dei risultati**
+
+Il modello è stato validato internamente mediante 10-fold cross-validation. Il modello di regressione lineare, basato su 2500 osservazioni e 4 predittori, ha mostrato una buona capacità predittiva, con un R² (coefficiente di determinazione) stimato fuori campione pari a 0.726, un RMSE (Root Mean Squared Error = radice dell'errore quadratico medio) pari a 273.6, un MAE (Mean Absolute Error = errore assoluto medio) di circa 210 unità. RMSE e MAE sono espressi nelle stesse unità della variabile risposta, e quindi rappresentano direttamente l’entità dell’errore medio delle predizioni.
+
+NOTA. Un R² di circa 0.73 spiega circa il 73% della variabilità della risposta. In questo caso il coefficiente di determinazione è stimato fuori campione, quindi meno sensibile all'overfitting.
+
+---------------------------
+
+### A.3. visualizzazione della qualità predittiva del modello
+
+Si crea uno scatterplot che, mettendo in relazione Peso osservato e Peso predetto, sintetizza l’esito della cross-validation, mostrando la bontà predittiva del modello, ovvero quanto le previsioni sono vicine ai valori reali.
+La diagonale, che corrisponde a y=x, indica una perfetta previsione. 
+La dispersione dei punti attorno alla diagonale indica presenza di bias sistematici del modello.
+
+
+```{r}
+# Valori osservati e predetti ottenuti con 10-fold cross-validation:
+y_obs  <- mod6_cv$pred$obs
+y_pred <- mod6_cv$pred$pred
+
+# Creazione di un data frame (con 2 colonne: osservati e predetti) per il grafico:
+df_pred <- data.frame(osservati = y_obs / 1e3, 
+                      predetti = y_pred / 1e3) # Peso in Kg
+
+ggplot(df_pred, 
+       aes(x = osservati, y = predetti)) +
+  geom_point(alpha = 0.4, 
+             color = "steelblue") +
+  geom_abline(intercept = 0,
+              color = "red",
+              linetype = "dashed",
+              linewidth = 1) +
+  labs(title = "Predicted vs Observed",
+       subtitle = "Valori predetti dal modello vs valori osservati",
+       x = "Peso osservato (Kg)",
+       y = "Peso predetto (Kg)") +
+  theme_minimal()
+
+```
+
+**Interpretazione dei risultati**
+
+Il grafico mette a confronto i valori osservati del peso alla nascita (asse x) con i valori predetti dal modello (asse y), ottenuti tramite k-fold cross-validation.
+La linea rossa tratteggiata rappresenta la bisettrice y=x, che corrisponde a una predizione perfetta.
+
+La maggior parte dei punti è concentrata attorno alla bisettrice, indicando una buona capacità predittiva del modello.
+
+La dispersione dei punti attorno alla bisettrice è: contenuta per la maggior parte dei valori centrali (≈ 2.5–4 kg), e leggermente più ampia agli estremi. Quindi il modello è più accurato nella regione in cui si concentra la maggior parte delle osservazioni, ma l’errore aumenta moderatamente per valori estremi (meno frequenti).
+Questo comportamento è tipico nei dati biologici.
+
+La nuvola di punti appare abbastanza simmetrica rispetto alla bisettrice, quindi non si osservano bias sistematici evienti di sovrastima o sottostima.
+
+
+----------------------------------------------
+
+### B. Usare il modello per fare previsioni
+
+Ad esempio, potremo stimare il peso di una neonata considerando una madre alla terza gravidanza che partorirà alla 39esima settimana.
+
+
+```{r, comment = NA}
+
+nuovo_bambino <- data.frame(
+  N.gravidanze = 3,
+  Gestazione = 39,
+  Lunghezza = mean(dati$Lunghezza, na.rm = TRUE), # lunghezza media
+  Cranio = mean(dati$Cranio, na.rm = TRUE), # diamtero cranio medio
+  Sesso = "Femmine"
+)
+
+stampa_predizione <- function() {
+  # Predizione del peso
+  predizione <- predict(mod6, newdata = nuovo_bambino)
+  
+  # Mostrare il risultato
+  cat("Predizione peso del neonato:", predizione[1], "grammi\n")
+
+}
+
+stampa_predizione()
+```
+
+
+
+-------------------------------------------
+
+
+# 4. Visualizzazioni
+
+**Visualizzazione dell'effetto di Gestazione e dell'interazione Gestazione x Cranio sul peso predetto**
+
+```{r}
+# calcola i tre quartili del cranio
+cranio_values <- quantile(dati$Cranio, probs = c(0.25, 0.5, 0.75))
+
+# valori di Gestazione (asse x)
+gest_values <- seq(from = min(dati$Gestazione, na.rm = TRUE),
+                   to = max(dati$Gestazione, na.rm = TRUE),
+                   length.out = 100)
+
+# Griglia di predizioni
+plot_data <- expand.grid(Gestazione = gest_values,
+                         Cranio = cranio_values,
+                         Lunghezza = mean(dati$Lunghezza, na.rm = TRUE), # valore costante
+                         Sesso = "Maschi") # valore costante
+
+# Predizioni del modello 6
+plot_data$Peso_pred <- predict(mod6, newdata = plot_data)
+
+# Etichette descrittive per i quartili del Cranio
+plot_data$Cranio_f <- factor( plot_data$Cranio,
+                              labels = c("Cranio basso (Q1)",
+                                         "Cranio medio (Q2)",
+                                         "Cranio alto (Q3)"))
+
+ggplot(plot_data, 
+       aes(x = Gestazione, y = Peso_pred, color = Cranio_f)) +
+  geom_line(size = 1) +
+  labs(title = "Interazione Gestazione:Cranio sul peso predetto",
+       subtitle = "Predizioni aggiustate per Lunghezza (media) e Sesso (Maschi)",
+       x = "Gestazione (settimane)",
+       y = "Peso predetto (g)",
+       color = "Cranio") +
+  theme_minimal()
+
+```
+
+**Interpretazione dei risultati**
+
+Il grafico mostra l'effetto della Gestazione sul Peso predetto a diversi valori della variabile Cranio (25°, 50° e 75° quartile), tenendo le altre variabili fisse (lunghezza media e sesso = maschio). Dal grafico si può osservare che:
+
+- La relazione tra gestazione e peso è lineare positiva: all'aumentare delle settimane di gestazione, aumenta il peso neonatale.
+
+- A parità di gestazione, un cranio più grande è associato a peso più alto. La differenza tra quartili è costante lungo tutta la gestazione, suggerendo un effetto additivo della variabile Cranio sul peso.
+
+- Interazione tra Gestazione e Cranio è presente, ma non forte, poichè le linee hanno pendenze poco diverse. Infatti la presenza di lineee parallele indica assenza di interazione, mentre l'interazione cresce all'aumentare della diversità tra le pendenze.
+
+-------------------------
+
+**Visualizzazione dell'effetto di Gestazione e dell'interazione Gestazione x Cranio sul peso predetto - stratificato per Sesso**
+
+```{r}
+# crea griglia di predizione per entrambi i sessi
+plot_data_sesso <- expand.grid(Gestazione = gest_values,
+                               Cranio = cranio_values,
+                               Lunghezza = mean(dati$Lunghezza, na.rm = TRUE), # valore costante
+                               Sesso = c("Maschi", "Femmine"))
+
+# predizioni del modello 6
+plot_data_sesso$Peso_pred <- predict(mod6, newdata = plot_data_sesso)
+
+# etichette descrittive per Cranio
+plot_data_sesso$Cranio_f <- factor(
+  plot_data_sesso$Cranio,
+  labels = c("Cranio basso (Q1)", "Cranio medio (Q2)", "Cranio alto (Q3)"))
+
+# grafico finale
+ggplot(plot_data_sesso, 
+       aes(x = Gestazione, y = Peso_pred, color = Cranio_f, linetype = Sesso)) +
+  geom_line(size = 1.2) +
+  labs(title = "Interazione Gestazione:Cranio sul peso predetto",
+       subtitle = "Predizioni aggiustate per Lunghezza (media) e stratificate per Sesso",
+       x = "Gestazione (settimane)",
+       y = "Peso predetto (g)",
+       color = "Cranio (cm)",
+       linetype = "Sesso") +
+  theme_minimal() +
+  scale_color_brewer(palette = "Set1")
+
+```
+
+**Interpretazione dei risultati**
+
+Il grafico considera l'effetto della gestazione sul Peso, a parità di Lunghezza, per diversi diametri di Cranio nei maschi e nelle femmine. 
+
+Si osserva che per ciascun quartile di Cranio, il Peso predetto dei maschi è superiore a quello delle femmine di circa 100–150 g, a parità di Gestazione e Lunghezza.
+
+In conclusione, a parità di Lunghezza:
+
+- il Peso neonatale aumenta all'aumentare del diametro del Cranio,
+
+- il Peso neonatale è maggiore nei maschi rispetto alle femmine,
+
+- il Peso neonatale aumenta all'aumentare della durata della gestazione
+
+---------------------------------------------------------------------
+
+# Conclusioni
+
+Il progetto di previsione del peso neonatale è un’iniziativa fondamentale per Neonatal Health Solutions. Attraverso l'uso di dati clinici dettagliati e strumenti di analisi statistica avanzati, possiamo contribuire a migliorare la qualità della cura prenatale, ridurre i rischi per i neonati e ottimizzare l’efficienza delle risorse ospedaliere. Questo progetto rappresenta un punto di svolta per l'azienda, consentendo non solo un miglioramento della pratica clinica ma anche l'implementazione di politiche sanitarie più informate e proattive.
